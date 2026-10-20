@@ -1,1 +1,6 @@
-{"name": "Model Scheduler", "description": "Shared model admission, idle unloading and cooperative GPU scheduling."}
+{
+  "meta": {
+    "title": "Model Scheduler",
+    "description": "Shared model admission, idle unloading and cooperative GPU scheduling."
+  }
+}
