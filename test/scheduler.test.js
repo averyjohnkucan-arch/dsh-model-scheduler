@@ -14,3 +14,22 @@ test('failed image generation still releases GPU and restores previous model',as
 test('an image request never interrupts an active chat',async t=>{const {s,driver,events}=fixture(t,{idleMs:30000});const chat=await s.acquire(driver('chat'));const image=s.runExclusive(driver('image'),async()=> 'png');await delay(10);assert.deepEqual(events,['load chat']);chat.release();await image;});
 
 test('image preflight failure restores the displaced model',async t=>{const {s,driver,events}=fixture(t,{idleMs:30000});(await s.acquire(driver('chat'))).release();await assert.rejects(()=>s.runExclusive(driver('image',{load:async()=>{throw Error('external GPU application');}}),async()=> 'png'),/external GPU application/);assert.deepEqual(events,['load chat','unload chat','unload image','load chat']);});
+
+test('idle retention and waiting-model switch grace are independent',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:300,switchMs:30});
+ const first=await s.acquire(driver('first'));first.release();await delay(55);
+ assert.deepEqual(events,['load first']); // no contender: retain beyond switch grace
+ const second=await s.acquire(driver('second'));assert.deepEqual(events,['load first','unload first','load second']);second.release();
+});
+test('waiting model gets the shorter grace after active response completion',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:35});
+ const first=await s.acquire(driver('first'));const waiting=s.acquire(driver('second'));await delay(45);assert.deepEqual(events,['load first']);first.release();await delay(8);assert.deepEqual(events,['load first']);const next=await waiting;next.release();assert.deepEqual(events,['load first','unload first','load second']);
+});
+test('cancelled contender returns to five-minute-style idle retention; timers are configurable',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:300,switchMs:25});const first=await s.acquire(driver('first'));first.release();
+ const abort=new AbortController(),waiting=s.acquire(driver('second'),abort.signal);abort.abort(Error('cancelled'));await assert.rejects(waiting,/cancelled/);await delay(50);assert.deepEqual(events,['load first']);
+ s.configure(0.2,0.01);assert.equal(s.status().idleSeconds,0.2);assert.equal(s.status().switchSeconds,0.01);assert.throws(()=>s.configure(300,-1),/Switch delay/);
+});
+test('new scheduler defaults retain for five minutes and switch after thirty seconds',async t=>{
+ const s=new ModelScheduler();t.after(()=>s.close());assert.equal(s.status().idleSeconds,300);assert.equal(s.status().switchSeconds,30);
+});

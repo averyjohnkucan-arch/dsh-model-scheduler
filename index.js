@@ -7,11 +7,11 @@ import { mkdir,readFile,writeFile,rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 export const inject=['webServer'];
-export const Config=z.object({idleSeconds:z.number().min(0).max(86400).default(30)});
+export const Config=z.object({idleSeconds:z.number().min(0).max(86400).default(300),switchSeconds:z.number().min(0).max(86400).default(30)});
 export async function apply(ctx,config){
  const root=join(process.env.DSH_HOME||join(homedir(),'.dsh'),'dsh-model-scheduler');await mkdir(root,{recursive:true,mode:0o700});
- let idleSeconds=config.idleSeconds;try{const saved=JSON.parse(await readFile(join(root,'settings.json'),'utf8'));if(Number.isFinite(saved.idleSeconds)&&saved.idleSeconds>=0&&saved.idleSeconds<=86400)idleSeconds=saved.idleSeconds;}catch(e){if(e.code!=='ENOENT')throw e;}
- const scheduler=new ModelScheduler({idleMs:idleSeconds*1000}),token=randomBytes(32).toString('hex');
+ let idleSeconds=config.idleSeconds??300,switchSeconds=config.switchSeconds??30;try{const saved=JSON.parse(await readFile(join(root,'settings.json'),'utf8'));if(Number.isFinite(saved.idleSeconds)&&saved.idleSeconds>=0&&saved.idleSeconds<=86400)idleSeconds=saved.idleSeconds;if(Number.isFinite(saved.switchSeconds)&&saved.switchSeconds>=0&&saved.switchSeconds<=86400)switchSeconds=saved.switchSeconds;}catch(e){if(e.code!=='ENOENT')throw e;}
+ const scheduler=new ModelScheduler({idleMs:idleSeconds*1000,switchMs:switchSeconds*1000}),token=randomBytes(32).toString('hex');
  ctx.provide('modelScheduler',scheduler);
  ctx.on('webserver/index-inject',table=>table.push({kind:'global',name:'__DSH_MODEL_SCHEDULER__',value:{path:'/plugins/dsh-model-scheduler/action',token}}));
  let writeQueue=Promise.resolve(),telemetryAt=0,telemetryPromise;
@@ -25,7 +25,7 @@ export async function apply(ctx,config){
   if(req.headers.origin&&req.headers.origin!==ctx.webServer.getOrigin()){res.writeHead(403);res.end('{}');return;}
   try{let body='',size=0;for await(const chunk of req){size+=chunk.length;if(size>16384)throw new Error('Request too large.');body+=chunk;}const {action,payload={}}=JSON.parse(body);let result;
    if(action==='list'){await telemetry();result=scheduler.status();}
-   else if(action==='configure'){scheduler.configure(Number(payload.idleSeconds));writeQueue=writeQueue.catch(()=>{}).then(async()=>{const path=join(root,'settings.json'),tmp=path+'.tmp';await writeFile(tmp,JSON.stringify({idleSeconds:scheduler.idleMs/1000}),{mode:0o600});await rename(tmp,path);});await writeQueue;result=scheduler.status();}
+   else if(action==='configure'){scheduler.configure(Number(payload.idleSeconds),payload.switchSeconds===undefined?scheduler.switchMs/1000:Number(payload.switchSeconds));writeQueue=writeQueue.catch(()=>{}).then(async()=>{const path=join(root,'settings.json'),tmp=path+'.tmp';await writeFile(tmp,JSON.stringify({idleSeconds:scheduler.idleMs/1000,switchSeconds:scheduler.switchMs/1000}),{mode:0o600});await rename(tmp,path);});await writeQueue;result=scheduler.status();}
    else if(action==='load')result=await scheduler.load(payload.key);
    else if(action==='unload')result=await scheduler.unload(payload.key,{force:!!payload.force});
    else throw new Error('Unknown scheduler operation.');res.end(JSON.stringify({result}));

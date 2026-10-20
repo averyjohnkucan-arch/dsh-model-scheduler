@@ -2,9 +2,9 @@
 
 A separate Cordis plugin for DeepSeek Harness 0.2.1-rc.2. Install this repository through DSH's plugin installer, or use `dsh plugin --profile web add link:/absolute/path/dsh-model-scheduler` for local development.
 
-The Models settings page exposes the idle delay (30 seconds by default), registered models, load/unload controls, current GPU owner and waiting requests. Strata and NInfer remain independent plugins; when this service is installed, they request admission through it. No Harness core patches are required.
+The Models settings page exposes the idle retention (300 seconds by default) and a separate model-switch grace (30 seconds by default), registered models, load/unload controls, current GPU owner and waiting requests. Strata and NInfer remain independent plugins; when this service is installed, they request admission through it. No Harness core patches are required.
 
-The scheduler serializes managed requests on each GPU. An active chat finishes before another model loads. Its idle grace period starts when the request and its KV checkpoint finish. A request for the same loaded model can reuse it immediately. Queues preserve arrival order, with interactive requests ahead of background work. Cancelling a queued chat removes it without loading its model.
+The scheduler serializes managed requests on each GPU. An active chat finishes before another model loads. Both timers start when the request and its KV checkpoint finish. With nothing waiting it stays loaded for up to five minutes; a different queued model uses the shorter switch grace, bounded by the idle-retention deadline. If that grace already elapsed, the waiting model can load immediately. Cancelling the waiting request returns to the original idle-retention deadline. A request for the same loaded model can reuse it immediately. Queues preserve arrival order, with interactive requests ahead of background work. Cancelling a queued chat removes it without loading its model.
 
 Unloading stops the process tree owned by its engine plugin. An external server cannot be forcibly unloaded: the scheduler reports that its owner must stop it. It also refuses to admit another model after a failed unload.
 
