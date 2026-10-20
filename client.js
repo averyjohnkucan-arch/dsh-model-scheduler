@@ -1,0 +1,18 @@
+window.__ModuleLoader__.load({id:'dsh-model-scheduler',factory(require){
+ const React=require('react'),h=React.createElement,{useState,useEffect}=React;
+ return{inject:['slots','locale'],apply(ctx){
+  ctx.effect(()=>ctx.locale.register('dsh-model-scheduler',{'en':{}}));
+  function Card(){const[data,setData]=useState(null),[seconds,setSeconds]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+   async function api(action,payload={}){const cfg=window.__DSH_MODEL_SCHEDULER__;if(!cfg)throw new Error('Restart DSH to connect the scheduler.');const r=await fetch(cfg.path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.token},body:JSON.stringify({action,payload})});const d=await r.json();if(!r.ok)throw new Error(d.error);return d.result;}
+   useEffect(()=>{let alive=true;const refresh=()=>api('list').then(d=>{if(alive)setData(d);}).catch(e=>{if(alive)setError(e.message);});refresh();const timer=setInterval(refresh,1500);return()=>{alive=false;clearInterval(timer);};},[]);
+   async function act(action,payload){setBusy(true);setError('');try{await api(action,payload);setData(await api('list'));}catch(e){setError(e.message);}finally{setBusy(false);}}
+   return h('section',{style:{marginTop:16,padding:16,border:'1px solid var(--dsw-alias-settings-card-stroke)',borderRadius:12,background:'var(--dsw-alias-settings-card-fill)'}},
+    h('h3',null,'Model Scheduler'),h('p',null,'Chats share one model at a time per GPU. Idle models unload after the configured delay. Only registered engines can be managed.'),
+    h('label',null,'Idle unload delay (seconds) ',h('input',{type:'number',min:0,max:86400,value:seconds??data?.idleSeconds??30,onChange:e=>setSeconds(e.target.value)})),h('button',{disabled:busy,onClick:()=>act('configure',{idleSeconds:Number(seconds??data?.idleSeconds??30)})},'Save'),
+    error&&h('p',{role:'alert'},error),data?.devices.map(d=>h('p',{key:d.gpu},'GPU '+d.gpu+': '+(d.model||'idle')+' · '+d.phase+' · '+d.queue.length+' waiting',d.error?' · '+d.error:'')),
+    data?.models.map(m=>h('div',{key:m.key,style:{display:'flex',gap:8,alignItems:'center',padding:'8px 0'}},h('span',{style:{flex:1}},m.name),h('button',{disabled:busy,onClick:()=>act('load',{key:m.key})},'Load'),h('button',{onClick:()=>act('unload',{key:m.key,force:true})},'Unload')))
+   );
+  }
+  ctx.slots.inject('settings.models.footer',()=>ctx.slots.register({name:'settings.models.footer',id:'dsh-model-scheduler',order:5},Card));
+ }};
+}});

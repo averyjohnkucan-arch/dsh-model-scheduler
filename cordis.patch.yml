@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-model-scheduler
+      name: dsh-model-scheduler
+      config: {}
