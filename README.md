@@ -17,3 +17,9 @@ Release a background lease at a document boundary. A waiting chat causes immedia
 Lifecycle policy lives here. Engine-specific cache formats and process ownership stay in their provider plugins. No requirement for Strata and NInfer to talk directly to each other.
 
 Run `node --test test/*.test.js` for queue, cancellation, priority, deadline and unload failure checks.
+
+## Exclusive image/video tools
+
+`runExclusive(driver, operation, {signal, restorePrevious:true})` waits for active inference, bypasses the idle grace period for a new workload, and confirms its owned process unload before restoring the prior chat driver. If another queued chat already owns the GPU, restoration is deferred to the next chat request. Preflight/render failures still attempt to restore the displaced model.
+
+The Models card lists detected NVIDIA GPU compute processes, including applications outside DSH. Detection is read-only; it does not imply ownership or grant permission to kill an external application. Cooperative third-party plugins can register their own lifecycle drivers. DSH Image Tools uses this API.
