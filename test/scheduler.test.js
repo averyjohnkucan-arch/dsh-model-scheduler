@@ -104,7 +104,7 @@ test('a driver that finishes its pending operation does not wait out the remaini
 test('foreground reservations finish before model load and remain held through inference',async t=>{
  const {s,driver,events}=fixture(t,{idleMs:500});let finish;const ready=new Promise(r=>finish=r);
  s.registerResourceGuard('embeddings',async()=>{events.push('yield requested');await ready;events.push('memory released');return()=>events.push('reservation ended');});
- const pending=s.acquire(driver('chat'));await delay(5);assert.deepEqual(events,['yield requested']);finish();
+ assert.deepEqual(s.status().resourceGuards,['embeddings']);const pending=s.acquire(driver('chat'));await delay(5);assert.deepEqual(events,['yield requested']);finish();
  const lease=await pending;assert.deepEqual(events,['yield requested','memory released','load chat']);lease.release();lease.release();assert.equal(events.filter(x=>x==='reservation ended').length,1);
 });
 test('image-to-chat restoration reserves foreground memory again before reloading',async t=>{
