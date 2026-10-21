@@ -100,3 +100,27 @@ test('a driver that finishes its pending operation does not wait out the remaini
  const next=await Promise.race([waiting,delay(500).then(()=>{throw Error('Completed driver did not hand over promptly')})]);next.release();
  assert.deepEqual(events,['load first','unload first','load second']);
 });
+
+test('foreground reservations finish before model load and remain held through inference',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500});let finish;const ready=new Promise(r=>finish=r);
+ s.registerResourceGuard('embeddings',async()=>{events.push('yield requested');await ready;events.push('memory released');return()=>events.push('reservation ended');});
+ const pending=s.acquire(driver('chat'));await delay(5);assert.deepEqual(events,['yield requested']);finish();
+ const lease=await pending;assert.deepEqual(events,['yield requested','memory released','load chat']);lease.release();lease.release();assert.equal(events.filter(x=>x==='reservation ended').length,1);
+});
+test('image-to-chat restoration reserves foreground memory again before reloading',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500});s.registerResourceGuard('embeddings',async({key})=>{events.push('reserve '+key);return()=>events.push('release '+key);});
+ (await s.acquire(driver('chat'))).release();await s.runExclusive(driver('image'),async()=>events.push('render'));
+ assert.ok(events.indexOf('reserve image')<events.indexOf('load image'));
+ assert.equal(events.filter(x=>x==='reserve chat').length,2);assert.ok(events.lastIndexOf('reserve chat')<events.lastIndexOf('load chat'));
+});
+test('reservation failure prevents loading and releases earlier reservations',async t=>{
+ const {s,driver,events}=fixture(t);s.registerResourceGuard('first',async()=>()=>events.push('released first'));s.registerResourceGuard('second',async()=>{throw Error('memory still busy');});
+ await assert.rejects(s.acquire(driver('chat')),/memory still busy/);assert.deepEqual(events,['released first']);
+});
+test('background admission does not reserve foreground resources',async t=>{
+ const {s,driver}=fixture(t);let calls=0;const remove=s.registerResourceGuard('embedding',async()=>{calls++;return()=>{};});(await s.acquire(driver('embedding',{priority:'background'}))).release();assert.equal(calls,0);remove();
+});
+test('shutdown during reservation cannot launch a model afterward',async t=>{
+ const {s,driver,events}=fixture(t);let finish;const ready=new Promise(r=>finish=r);s.registerResourceGuard('embedding',async()=>{await ready;return()=>events.push('released');});
+ const pending=s.acquire(driver('chat'));await delay(1);await s.close();finish();await assert.rejects(pending,/disabled/);assert.deepEqual(events,['released']);
+});
