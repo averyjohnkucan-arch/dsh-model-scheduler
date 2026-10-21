@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {setTimeout as delay} from 'node:timers/promises';import {ModelScheduler} from '../lib/scheduler.js';
 function fixture(t,opts={}){const events=[],s=new ModelScheduler({idleMs:20,...opts});t.after(()=>s.close());const driver=(key,extra={})=>({key,name:key,gpu:0,fingerprint:key,load:async()=>{events.push('load '+key);return key;},unload:async()=>events.push('unload '+key),...extra});return {s,events,driver};}
-test('FIFO chat switching waits for release and idle timeout; matching model reuses',async t=>{const {s,driver,events}=fixture(t);const a=await s.acquire(driver('a'));let next=false;const b=s.acquire(driver('b')).then(x=>(next=true,x));await delay(25);assert.equal(next,false);a.release();await delay(5);assert.equal(next,false);const lease=await b;assert.deepEqual(events,['load a','unload a','load b']);lease.release();const reused=await s.acquire(driver('b'));assert.equal(events.length,3);reused.release();});
+test('FIFO chat switching waits for release then switches immediately; matching model reuses',async t=>{const {s,driver,events}=fixture(t);const a=await s.acquire(driver('a'));let next=false;const b=s.acquire(driver('b')).then(x=>(next=true,x));await delay(25);assert.equal(next,false);a.release();const lease=await b;assert.equal(next,true);assert.deepEqual(events,['load a','unload a','load b']);lease.release();const reused=await s.acquire(driver('b'));assert.equal(events.length,3);reused.release();});
 test('aborted queued request never loads; unload explicitly aborts owned active request',async t=>{const {s,driver,events}=fixture(t);const a=await s.acquire(driver('a')),abort=new AbortController();const pending=s.acquire(driver('b'),abort.signal);abort.abort(new Error('cancelled'));await assert.rejects(pending,/cancelled/);await s.unload('a',{force:true});assert.equal(a.signal.aborted,true);assert.deepEqual(events,['load a','unload a']);a.release();});
 test('foreground precedes queued background and background yields at document boundary',async t=>{const {s,driver,events}=fixture(t,{yieldMs:50});const background=await s.acquire(driver('background',{priority:'background'}));const other=s.acquire(driver('other',{priority:'background'}));const chat=s.acquire(driver('chat'));background.release();const answer=await chat;assert.deepEqual(events,['load background','unload background','load chat']);answer.release();const b=await other;b.release();});
 test('background deadline aborts unfinished work before unloading and admits chat',async t=>{const {s,driver,events}=fixture(t,{yieldMs:15});const background=await s.acquire(driver('background',{priority:'background'}));const pending=s.acquire(driver('chat'));const answer=await pending;assert.equal(background.signal.aborted,true);assert.deepEqual(events,['load background','unload background','load chat']);answer.release();background.release();});
@@ -21,15 +21,82 @@ test('idle retention and waiting-model switch grace are independent',async t=>{
  assert.deepEqual(events,['load first']); // no contender: retain beyond switch grace
  const second=await s.acquire(driver('second'));assert.deepEqual(events,['load first','unload first','load second']);second.release();
 });
-test('waiting model gets the shorter grace after active response completion',async t=>{
+test('waiting model switches immediately after a completed request without a pending turn',async t=>{
  const {s,driver,events}=fixture(t,{idleMs:500,switchMs:35});
- const first=await s.acquire(driver('first'));const waiting=s.acquire(driver('second'));await delay(45);assert.deepEqual(events,['load first']);first.release();await delay(8);assert.deepEqual(events,['load first']);const next=await waiting;next.release();assert.deepEqual(events,['load first','unload first','load second']);
+ const first=await s.acquire(driver('first'));const waiting=s.acquire(driver('second'));await delay(45);assert.deepEqual(events,['load first']);first.release();const next=await waiting;next.release();assert.deepEqual(events,['load first','unload first','load second']);
 });
 test('cancelled contender returns to five-minute-style idle retention; timers are configurable',async t=>{
- const {s,driver,events}=fixture(t,{idleMs:300,switchMs:25});const first=await s.acquire(driver('first'));first.release();
+ const {s,driver,events}=fixture(t,{idleMs:300,switchMs:25});s.turnStarted('session');const first=await s.withSession('session',()=>s.acquire(driver('first')));first.release();
  const abort=new AbortController(),waiting=s.acquire(driver('second'),abort.signal);abort.abort(Error('cancelled'));await assert.rejects(waiting,/cancelled/);await delay(50);assert.deepEqual(events,['load first']);
  s.configure(0.2,0.01);assert.equal(s.status().idleSeconds,0.2);assert.equal(s.status().switchSeconds,0.01);assert.throws(()=>s.configure(300,-1),/Switch delay/);
 });
 test('new scheduler defaults retain for five minutes and switch after thirty seconds',async t=>{
  const s=new ModelScheduler();t.after(()=>s.close());assert.equal(s.status().idleSeconds,300);assert.equal(s.status().switchSeconds,30);
+});
+
+test('keep-warm chat survives idle timeout and configuration changes, but yields to another model',async t=>{
+ const {s,events,driver}=fixture(t,{idleMs:5,switchMs:0});
+ const warm=driver('warm',{keepWarm:true});
+ (await s.acquire(warm)).release();
+ await delay(15);
+ s.configure(0,0);
+ await delay(10);
+ assert.deepEqual(events,['load warm']);
+ assert.equal(s.status().devices[0].keepWarm,true);
+ (await s.acquire(warm)).release();
+ assert.deepEqual(events,['load warm']);
+ (await s.acquire(driver('other'))).release();
+ assert.deepEqual(events.slice(0,3),['load warm','unload warm','load other']);
+});
+
+test('keep-warm never blocks image work, explicit unloading, or scheduler shutdown',async t=>{
+ const {s,events,driver}=fixture(t,{idleMs:1,switchMs:30000});
+ (await s.acquire(driver('warm',{keepWarm:true}))).release();
+ await s.runExclusive(driver('image'),async()=>events.push('image work'),{restorePrevious:false});
+ assert.deepEqual(events,['load warm','unload warm','load image','image work','unload image']);
+ (await s.acquire(driver('warm',{keepWarm:true}))).release();
+ await s.unload('warm');
+ assert.equal(s.status().devices[0].phase,'unloaded');
+});
+
+
+test('a pending tool turn gets grace only while another model waits',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:35});s.turnStarted('session');
+ const first=await s.withSession('session',()=>s.acquire(driver('first')));first.release();
+ await delay(45);assert.deepEqual(events,['load first']);
+ const waiting=s.acquire(driver('second'));await delay(8);assert.deepEqual(events,['load first']);
+ const next=await waiting;assert.deepEqual(events,['load first','unload first','load second']);next.release();
+});
+test('turn completion removes grace immediately',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:30000});s.turnStarted('session');
+ const first=await s.withSession('session',()=>s.acquire(driver('first')));first.release();
+ const waiting=s.acquire(driver('second'));await delay(5);assert.deepEqual(events,['load first']);s.turnEnded('session');
+ const next=await waiting;next.release();assert.deepEqual(events,['load first','unload first','load second']);
+});
+test('a same-turn continuation can run during grace without losing its session identity',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:60});s.turnStarted('session');
+ (await s.withSession('session',()=>s.acquire(driver('first')))).release();
+ const waiting=s.acquire(driver('second'));const again=await s.withSession('session',()=>s.acquire(driver('first')));
+ assert.deepEqual(events,['load first']);again.release();s.turnEnded('session');(await waiting).release();
+});
+test('stream wrapper preserves events and associates leases using async session context',async t=>{
+ const {s,driver}=fixture(t);let session;
+ const output=[];for await(const value of s.sessionStream('session',()=> (async function*(){const lease=await s.acquire(driver('a'));session=s.device(0).current.sessionId;try{yield 'first';await delay(1);yield 'second';}finally{lease.release();}})()))output.push(value);
+ assert.equal(session,'session');assert.deepEqual(output,['first','second']);
+});
+
+test('completion of one shared-model session does not clear another pending turn',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:50});s.turnStarted('one');s.turnStarted('two');
+ (await s.withSession('one',()=>s.acquire(driver('first')))).release();
+ (await s.withSession('two',()=>s.acquire(driver('first')))).release();
+ s.turnEnded('two');const waiting=s.acquire(driver('second'));await delay(8);assert.deepEqual(events,['load first']);
+ s.turnEnded('one');(await waiting).release();assert.deepEqual(events,['load first','unload first','load second']);
+});
+
+test('a driver that finishes its pending operation does not wait out the remaining grace',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:30000});let busy=false;
+ (await s.acquire(driver('first',{busy:()=>busy}))).release();busy=true;
+ const waiting=s.acquire(driver('second'));await delay(5);assert.deepEqual(events,['load first']);busy=false;
+ const next=await Promise.race([waiting,delay(500).then(()=>{throw Error('Completed driver did not hand over promptly')})]);next.release();
+ assert.deepEqual(events,['load first','unload first','load second']);
 });

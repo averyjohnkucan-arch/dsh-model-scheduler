@@ -13,6 +13,10 @@ export async function apply(ctx,config){
  let idleSeconds=config.idleSeconds??300,switchSeconds=config.switchSeconds??30;try{const saved=JSON.parse(await readFile(join(root,'settings.json'),'utf8'));if(Number.isFinite(saved.idleSeconds)&&saved.idleSeconds>=0&&saved.idleSeconds<=86400)idleSeconds=saved.idleSeconds;if(Number.isFinite(saved.switchSeconds)&&saved.switchSeconds>=0&&saved.switchSeconds<=86400)switchSeconds=saved.switchSeconds;}catch(e){if(e.code!=='ENOENT')throw e;}
  const scheduler=new ModelScheduler({idleMs:idleSeconds*1000,switchMs:switchSeconds*1000}),token=randomBytes(32).toString('hex');
  ctx.provide('modelScheduler',scheduler);
+ // Public DSH hooks associate a lease with its conversation without requiring
+ // engine plugins to know each other or to implement turn tracking.
+ ctx.on('session/event',(session,event)=>{if(event.type==='turn/start')scheduler.turnStarted(session.id);else if(event.type==='turn/end')scheduler.turnEnded(session.id);},{global:true});
+ ctx.inject(['llm'],scope=>scope.on('llm/stream',function(options,next){return scheduler.sessionStream(options.purpose?undefined:options.sessionId,next);}));
  ctx.on('webserver/index-inject',table=>table.push({kind:'global',name:'__DSH_MODEL_SCHEDULER__',value:{path:'/plugins/dsh-model-scheduler/action',token}}));
  let writeQueue=Promise.resolve(),telemetryAt=0,telemetryPromise;
  async function telemetry(){if(Date.now()-telemetryAt<5000)return;if(telemetryPromise)return telemetryPromise;telemetryPromise=promisify(execFile)('nvidia-smi',['--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory','--format=csv,noheader,nounits'],{timeout:2000,maxBuffer:65536,windowsHide:true}).then(({stdout})=>{scheduler.gpuProcesses=stdout.trim().split('\n').filter(Boolean).map(line=>{const parts=line.split(',').map(x=>x.trim());return {gpu:parts[0],pid:Number(parts[1]),name:parts.slice(2,-1).join(','),memoryMiB:Number(parts.at(-1))};});scheduler.telemetryError=null;}).catch(e=>{scheduler.telemetryError=e.message;scheduler.gpuProcesses=[];}).finally(()=>{telemetryAt=Date.now();telemetryPromise=null;});return telemetryPromise;}
