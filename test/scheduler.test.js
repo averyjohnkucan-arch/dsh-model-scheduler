@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {setTimeout as delay} from 'node:timers/promises';import {ModelScheduler} from '../lib/scheduler.js';
-function fixture(t,opts={}){const events=[],s=new ModelScheduler({idleMs:20,...opts});t.after(()=>s.close());const driver=(key,extra={})=>({key,name:key,gpu:0,fingerprint:key,load:async()=>{events.push('load '+key);return key;},unload:async()=>events.push('unload '+key),...extra});return {s,events,driver};}
+function fixture(t,opts={}){const events=[],s=new ModelScheduler({idleMs:20,backgroundMs:20,...opts});t.after(()=>s.close());const driver=(key,extra={})=>({key,name:key,gpu:0,fingerprint:key,load:async()=>{events.push('load '+key);return key;},unload:async()=>events.push('unload '+key),...extra});return {s,events,driver};}
 test('FIFO chat switching waits for release then switches immediately; matching model reuses',async t=>{const {s,driver,events}=fixture(t);const a=await s.acquire(driver('a'));let next=false;const b=s.acquire(driver('b')).then(x=>(next=true,x));await delay(25);assert.equal(next,false);a.release();const lease=await b;assert.equal(next,true);assert.deepEqual(events,['load a','unload a','load b']);lease.release();const reused=await s.acquire(driver('b'));assert.equal(events.length,3);reused.release();});
 test('aborted queued request never loads; unload explicitly aborts owned active request',async t=>{const {s,driver,events}=fixture(t);const a=await s.acquire(driver('a')),abort=new AbortController();const pending=s.acquire(driver('b'),abort.signal);abort.abort(new Error('cancelled'));await assert.rejects(pending,/cancelled/);await s.unload('a',{force:true});assert.equal(a.signal.aborted,true);assert.deepEqual(events,['load a','unload a']);a.release();});
 test('foreground precedes queued background and background yields at document boundary',async t=>{const {s,driver,events}=fixture(t,{yieldMs:50});const background=await s.acquire(driver('background',{priority:'background'}));const other=s.acquire(driver('other',{priority:'background'}));const chat=s.acquire(driver('chat'));background.release();const answer=await chat;assert.deepEqual(events,['load background','unload background','load chat']);answer.release();const b=await other;b.release();});
@@ -123,4 +123,39 @@ test('background admission does not reserve foreground resources',async t=>{
 test('shutdown during reservation cannot launch a model afterward',async t=>{
  const {s,driver,events}=fixture(t);let finish;const ready=new Promise(r=>finish=r);s.registerResourceGuard('embedding',async()=>{await ready;return()=>events.push('released');});
  const pending=s.acquire(driver('chat'));await delay(1);await s.close();finish();await assert.rejects(pending,/disabled/);assert.deepEqual(events,['released']);
+});
+
+test('queued OCR does not evict a completed keep-warm chat until the background delay',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,backgroundMs:60,switchMs:5});
+ const chat=await s.acquire(driver('chat',{keepWarm:true}));
+ const waiting=s.acquire(driver('ocr',{priority:'background'}));chat.release();
+ await delay(20);assert.deepEqual(events,['load chat']);
+ (await waiting).release();assert.deepEqual(events,['load chat','unload chat','load ocr']);
+});
+test('new foreground inference resets the background delay and reuses the resident model',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,backgroundMs:90});
+ (await s.acquire(driver('chat'))).release();
+ const waiting=s.acquire(driver('ocr',{priority:'background'}));await delay(55);
+ (await s.acquire(driver('chat'))).release();
+ await delay(55);assert.deepEqual(events,['load chat']);
+ (await waiting).release();assert.deepEqual(events,['load chat','unload chat','load ocr']);
+});
+test('background delay expiration never interrupts an unfinished foreground turn',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,backgroundMs:10,switchMs:5});s.turnStarted('chat');
+ (await s.withSession('chat',()=>s.acquire(driver('chat')))).release();
+ const waiting=s.acquire(driver('ocr',{priority:'background'}));await delay(30);
+ assert.deepEqual(events,['load chat']);s.turnEnded('chat');
+ (await waiting).release();assert.deepEqual(events,['load chat','unload chat','load ocr']);
+});
+test('a different foreground chat bypasses background delay and explicit unload still works',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,backgroundMs:60000});
+ (await s.acquire(driver('chat'))).release();
+ const waiting=s.acquire(driver('ocr',{priority:'background'}));
+ const next=await s.acquire(driver('other-chat'));
+ assert.deepEqual(events,['load chat','unload chat','load other-chat']);next.release();
+ await s.unload('other-chat');(await waiting).release();
+ assert.deepEqual(events.slice(-2),['unload other-chat','load ocr']);
+ assert.equal(s.status().backgroundSeconds,60);
+ s.configure(0.5,0.03,0.12);assert.equal(s.status().backgroundSeconds,0.12);
+ assert.throws(()=>s.configure(300,30,-1),/Background delay/);
 });
