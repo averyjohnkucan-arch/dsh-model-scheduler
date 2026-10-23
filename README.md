@@ -31,3 +31,29 @@ The Models card lists detected NVIDIA GPU compute processes, including applicati
 ## Foreground resource reservations
 
 Background plugins can register `registerResourceGuard(id, async ({gpu, key, signal}) => release)` on the optional `modelScheduler` Cordis service. Before every interactive load or reuse (including image rendering and automatic chat restoration), the scheduler waits for these guards to finish releasing background device workers. It holds their returned, idempotently released reservations for the inference lease. Failed reservations prevent model startup; earlier reservations are released. Background leases do not reserve foreground resources. Plugins own and stop their own workers; the scheduler never guesses or kills external processes. Knowledge uses this hook to yield its GPU embedding workers while leaving CPU and NPU lanes available.
+
+## Generation indicators
+
+Actively admitted foreground generation is blue with a smooth 650 ms rotation.
+Queued work, model loading, tools waiting without a generation lease, and retained
+idle models keep the normal grey indicator. Activity includes scheduled image and
+video generation. A generating subagent also lights its ancestor chats; a normal
+fork does not. Background OCR/embedding never lights a chat. Unscheduled providers
+light up after their first output delta, since their prefill admission is not
+observable. Reduced-motion preferences disable the extra rotation.
+
+The plugin uses `session/event`, `llm/stream`, and `tools/execute` to associate work
+with sessions. One lightweight authenticated poll per visible browser page reads
+activity every 500 ms; it does not query NVIDIA, write to disk, or start models.
+Failed/disconnected polls clear the blue state.
+
+The sidebar uses its row-action slot to supply scoped styles. DSH 0.2.1-rc.2 has no
+per-subagent indicator slot, so the plugin shadows only the two subagent catalog
+presentation slots using the supported priority mechanism. Its local, MIT-licensed
+view preserves the upstream navigation, keyboard handling, metrics and locale;
+only its status indicators change. See `client/subagent-views.js` and
+`THIRD_PARTY_LICENSES.md`. Removing the plugin restores the standard views.
+No Harness files or other plugins are modified.
+
+After editing the client sources, run `npm run build` to regenerate `client.js`,
+then `npm run check` and `npm test`.

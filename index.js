@@ -15,8 +15,11 @@ export async function apply(ctx,config){
  ctx.provide('modelScheduler',scheduler);
  // Public DSH hooks associate a lease with its conversation without requiring
  // engine plugins to know each other or to implement turn tracking.
- ctx.on('session/event',(session,event)=>{if(event.type==='turn/start')scheduler.turnStarted(session.id);else if(event.type==='turn/end')scheduler.turnEnded(session.id);},{global:true});
- ctx.inject(['llm'],scope=>scope.on('llm/stream',function(options,next){return scheduler.sessionStream(options.purpose?undefined:options.sessionId,next);}));
+ ctx.on('session/event',(session,event)=>{scheduler.activity.observe(session,event);if(event.type==='turn/start')scheduler.turnStarted(session.id);else if(event.type==='turn/end')scheduler.turnEnded(session.id);},{global:true});
+ ctx.inject(['llm'],scope=>scope.on('llm/stream',function(options,next){return scheduler.sessionStream(options.purpose?undefined:options.sessionId,next,options.signal);}));
+ // This only propagates identity. Ordinary tools never turn the spinner blue;
+ // their admitted model lease does (including image/video work and PTC calls).
+ ctx.inject(['tools'],scope=>scope.on('tools/execute',(exec,next)=>scheduler.withSession(exec.agent?.session?.id,next)));
  ctx.on('webserver/index-inject',table=>table.push({kind:'global',name:'__DSH_MODEL_SCHEDULER__',value:{path:'/plugins/dsh-model-scheduler/action',token}}));
  let writeQueue=Promise.resolve(),telemetryAt=0,telemetryPromise;
  async function telemetry(){if(Date.now()-telemetryAt<5000)return;if(telemetryPromise)return telemetryPromise;telemetryPromise=promisify(execFile)('nvidia-smi',['--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory','--format=csv,noheader,nounits'],{timeout:2000,maxBuffer:65536,windowsHide:true}).then(({stdout})=>{scheduler.gpuProcesses=stdout.trim().split('\n').filter(Boolean).map(line=>{const parts=line.split(',').map(x=>x.trim());return {gpu:parts[0],pid:Number(parts[1]),name:parts.slice(2,-1).join(','),memoryMiB:Number(parts.at(-1))};});scheduler.telemetryError=null;}).catch(e=>{scheduler.telemetryError=e.message;scheduler.gpuProcesses=[];}).finally(()=>{telemetryAt=Date.now();telemetryPromise=null;});return telemetryPromise;}
@@ -29,6 +32,7 @@ export async function apply(ctx,config){
   if(req.headers.origin&&req.headers.origin!==ctx.webServer.getOrigin()){res.writeHead(403);res.end('{}');return;}
   try{let body='',size=0;for await(const chunk of req){size+=chunk.length;if(size>16384)throw new Error('Request too large.');body+=chunk;}const {action,payload={}}=JSON.parse(body);let result;
    if(action==='list'){await telemetry();result=scheduler.status();}
+   else if(action==='activity')result=scheduler.activityStatus();
    else if(action==='configure'){scheduler.configure(Number(payload.idleSeconds),payload.switchSeconds===undefined?scheduler.switchMs/1000:Number(payload.switchSeconds),payload.backgroundSeconds===undefined?scheduler.backgroundMs/1000:Number(payload.backgroundSeconds));writeQueue=writeQueue.catch(()=>{}).then(async()=>{const path=join(root,'settings.json'),tmp=path+'.tmp';await writeFile(tmp,JSON.stringify({idleSeconds:scheduler.idleMs/1000,switchSeconds:scheduler.switchMs/1000,backgroundSeconds:scheduler.backgroundMs/1000}),{mode:0o600});await rename(tmp,path);});await writeQueue;result=scheduler.status();}
    else if(action==='load')result=await scheduler.load(payload.key);
    else if(action==='unload')result=await scheduler.unload(payload.key,{force:!!payload.force});

@@ -159,3 +159,47 @@ test('a different foreground chat bypasses background delay and explicit unload 
  s.configure(0.5,0.03,0.12);assert.equal(s.status().backgroundSeconds,0.12);
  assert.throws(()=>s.configure(300,30,-1),/Background delay/);
 });
+
+test('background exclusive tool can hand off its own idle conversation without ending the turn',async t=>{
+ const {s,driver,events}=fixture(t,{backgroundMs:300000,switchMs:30000});
+ s.turnStarted('video-conversation');const chat=await s.withSession('video-conversation',()=>s.acquire(driver('chat')));chat.release();
+ const abort=new AbortController();const timer=setTimeout(()=>abort.abort(Error('deadlocked waiting for its own turn')),200);
+ try{await s.runExclusive(driver('video',{priority:'background',handoffSessionId:'video-conversation'}),async()=>events.push('video'),{signal:abort.signal});}
+ finally{clearTimeout(timer);s.turnEnded('video-conversation');}
+ assert.deepEqual(events,['load chat','unload chat','load video','video','unload video','load chat']);
+});
+
+test('own-turn video handoff bypasses queued background work that is waiting for that same turn',async t=>{
+ const {s,driver,events}=fixture(t,{backgroundMs:300000,switchMs:30000});
+ s.turnStarted('video-conversation');const chat=await s.withSession('video-conversation',()=>s.acquire(driver('chat')));chat.release();
+ const ingestion=s.acquire(driver('ingestion',{priority:'background'}));
+ const abort=new AbortController(),timer=setTimeout(()=>abort.abort(Error('video blocked behind queued ingestion')),200);
+ try{const result=await s.runExclusive(driver('video',{priority:'background',handoffSessionId:'video-conversation'}),async()=>events.push('video'),{signal:abort.signal,restorePrevious:false});assert.equal(result.restoration,'not-needed');}
+ finally{clearTimeout(timer);s.turnEnded('video-conversation');}
+ assert.deepEqual(events.slice(0,5),['load chat','unload chat','load video','video','unload video']);(await ingestion).release();
+});
+
+test('own-turn video handoff does not interrupt a background job that is already running',async t=>{
+ const {s,driver,events}=fixture(t,{backgroundMs:300000,switchMs:30000});
+ const ingestion=await s.acquire(driver('ingestion',{priority:'background'}));
+ const waiting=s.runExclusive(driver('video',{priority:'background',handoffSessionId:'video-conversation'}),async()=>events.push('video'),{restorePrevious:false});
+ await delay(15);assert.deepEqual(events,['load ingestion']);assert.equal(ingestion.signal.aborted,false);ingestion.release();await waiting;
+ assert.deepEqual(events,['load ingestion','unload ingestion','load video','video','unload video']);
+});
+
+test('a chat-blocking tool restores its main model before queued background ingestion',async t=>{
+ const {s,driver,events}=fixture(t,{backgroundMs:300000,switchMs:30000});s.turnStarted('conversation');
+ (await s.withSession('conversation',()=>s.acquire(driver('chat')))).release();
+ const controller=new AbortController(),background=s.acquire(driver('ingestion',{priority:'background'}),controller.signal);background.catch(()=>{});
+ const result=await s.runExclusive(driver('video',{priority:'background',handoffSessionId:'conversation'}),async()=>events.push('video'));
+ controller.abort();(await background.catch(()=>null))?.release();s.turnEnded('conversation');
+ assert.equal(result.restoration,'loaded');assert.deepEqual(events.slice(0,6),['load chat','unload chat','load video','video','unload video','load chat']);
+});
+
+test('foreground exclusive inference also reserves chat restoration ahead of background work',async t=>{
+ const {s,driver,events}=fixture(t,{backgroundMs:300000});(await s.acquire(driver('chat'))).release();
+ const controller=new AbortController(),background=s.acquire(driver('ingestion',{priority:'background'}),controller.signal);background.catch(()=>{});
+ const result=await s.runExclusive(driver('image',{priority:'interactive'}),async()=>events.push('render'));
+ controller.abort();(await background.catch(()=>null))?.release();
+ assert.equal(result.restoration,'loaded');assert.deepEqual(events.slice(0,6),['load chat','unload chat','load image','render','unload image','load chat']);
+});
