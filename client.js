@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({id:'dsh-model-scheduler',factory(require){
  function installGenerationIndicators(ctx, require) {
  const {useSyncExternalStore} = React;
  const {StateDot} = require('@deepseek-ai/dsh-client-ui-primitives');
- let snapshot = {directSessionIds:[],activeSessionIds:[]}, serial='', timer, controller, stopped=false;
+ let snapshot = {directSessionIds:[],activeSessionIds:[],directGeneratingSessionIds:[],generatingSessionIds:[]}, serial='', timer, controller, stopped=false;
  const listeners=new Set();
  const subscribe=listener=>{listeners.add(listener);return()=>listeners.delete(listener);};
  const getSnapshot=()=>snapshot;
@@ -24,17 +24,17 @@ window.__ModuleLoader__.load({id:'dsh-model-scheduler',factory(require){
    const {result}=await response.json();
    if(!Array.isArray(result?.activeSessionIds)||!Array.isArray(result?.directSessionIds))throw Error('Invalid activity');
    if(!stopped)publish(result);
-  }catch{if(!stopped)publish({directSessionIds:[],activeSessionIds:[]});}
+  }catch{if(!stopped)publish({directSessionIds:[],activeSessionIds:[],directGeneratingSessionIds:[],generatingSessionIds:[]});}
   finally{clearTimeout(timeout);controller=null;if(!stopped)timer=setTimeout(refresh,500);}
  }
  ctx.effect(()=>{refresh();return()=>{stopped=true;clearTimeout(timer);controller?.abort();listeners.clear();};});
 
  // Only the rotation is animated: a constant-speed compositor transform, with
  // no stepped dash animation. Keep the track dim and the arc unmistakably blue.
- const spinCSS=selector=>`${selector}{color:#579bff!important}${selector}>g{animation:dsh-generation-spin .65s linear infinite!important;transform-origin:12px 12px;transform-box:view-box}${selector} circle{animation:none!important;stroke:currentColor!important}${selector} circle:first-child{opacity:.22}${selector} circle:last-child{opacity:1;stroke-dasharray:20 40;stroke-dashoffset:0}`;
+ const spinCSS=(selector,fast)=>`${selector}{color:#579bff!important}${selector}>g{animation:dsh-generation-spin ${fast?'.65s':'1.5s'} linear infinite!important;transform-origin:12px 12px;transform-box:view-box}${selector} circle{animation:none!important;stroke:currentColor!important}${selector} circle:first-child{opacity:.22}${selector} circle:last-child{opacity:1;stroke-dasharray:20 40;stroke-dashoffset:0}`;
  ctx.effect(()=>{
   const style=document.createElement('style');style.dataset.plugin='dsh-model-scheduler';
-  style.textContent=`@keyframes dsh-generation-spin{to{transform:rotate(360deg)}}${spinCSS('.dsh-generation-active[data-state="ongoing"]')}@media(prefers-reduced-motion:reduce){.dsh-generation-active[data-state="ongoing"]>g{animation:none!important}}`;
+  style.textContent=`@keyframes dsh-generation-spin{to{transform:rotate(360deg)}}${spinCSS('.dsh-generation-working[data-state="ongoing"]',false)}${spinCSS('.dsh-generation-active[data-state="ongoing"]',true)}@media(prefers-reduced-motion:reduce){.dsh-generation-active[data-state="ongoing"]>g,.dsh-generation-working[data-state="ongoing"]>g{animation:none!important}}`;
   document.head.appendChild(style);return()=>style.remove();
  });
  function useActive(useSessions){
@@ -45,23 +45,22 @@ window.__ModuleLoader__.load({id:'dsh-model-scheduler',factory(require){
   const parents=new Map();
   for(const [id,summary] of Object.entries(catalog.byId??{}))if(summary.origin==='subagent'&&summary.parentId)parents.set(id,summary.parentId);
   for(const [parent,projection] of Object.entries(catalog.projectionsBySession??{}))for(const entry of projection.values?.subagentCatalog??[])if(entry.mode!=='external')parents.set(entry.id,parent);
-  const active=new Set(state.activeSessionIds);
-  for(const id of state.directSessionIds){const seen=new Set([id]);let parent=parents.get(id);while(parent&&!seen.has(parent)){active.add(parent);seen.add(parent);parent=parents.get(parent);}}
-  return active;
+  const rollup=(all,direct)=>{const result=new Set(all??[]);for(const id of direct??[]){const seen=new Set([id]);let parent=parents.get(id);while(parent&&!seen.has(parent)){result.add(parent);seen.add(parent);parent=parents.get(parent);}}return result;};
+  return {working:rollup(state.activeSessionIds,state.directSessionIds),generating:rollup(state.generatingSessionIds,state.directGeneratingSessionIds)};
  }
  function RowActivity({sessionId,useSessions}){
-  const active=useActive(useSessions).has(sessionId);
-  if(!active)return null;
+  const activity=useActive(useSessions),fast=activity.generating.has(sessionId);
+  if(!activity.working.has(sessionId))return null;
   const selector=`[data-row-key="${CSS.escape('session:'+sessionId)}"]>span:first-child svg[data-state="ongoing"]`;
-  return h(React.Fragment,null,h('style',null,spinCSS(selector)+`@media(prefers-reduced-motion:reduce){${selector}>g{animation:none!important}}`),h('span',{style:{position:'absolute',width:1,height:1,overflow:'hidden',clipPath:'inset(50%)'}},'Generating'));
+  return h(React.Fragment,null,h('style',null,spinCSS(selector,fast)+`@media(prefers-reduced-motion:reduce){${selector}>g{animation:none!important}}`),h('span',{style:{position:'absolute',width:1,height:1,overflow:'hidden',clipPath:'inset(50%)'}},fast?'Generating tokens':'Working'));
  }
  ctx.slots.inject('sidebar.workspaces.session.row.action',()=>ctx.slots.register({name:'sidebar.workspaces.session.row.action',id:'dsh-generation-activity',order:1000},RowActivity));
 
- const ActivityContext=React.createContext(new Set());
+ const ActivityContext=React.createContext({working:new Set(),generating:new Set()});
  function GenerationDot({sessionId,sessionIds=[],state}){
   const active=React.useContext(ActivityContext);
-  const generating=active.has(sessionId)||sessionIds.some(id=>active.has(id));
-  return h(StateDot,{state,className:generating?'dsh-generation-active':undefined});
+  const ids=[sessionId,...sessionIds],generating=ids.some(id=>active.generating.has(id)),working=ids.some(id=>active.working.has(id));
+  return h(StateDot,{state,className:generating?'dsh-generation-active':working?'dsh-generation-working':undefined});
  }
  const views=createSubagentViews(require,GenerationDot);
  // Supported slot priority shadowing keeps all changes in this plugin. The

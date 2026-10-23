@@ -34,13 +34,15 @@ Background plugins can register `registerResourceGuard(id, async ({gpu, key, sig
 
 ## Generation indicators
 
-Actively admitted foreground generation is blue with a smooth 650 ms rotation.
-Queued work, model loading, tools waiting without a generation lease, and retained
-idle models keep the normal grey indicator. Activity includes scheduled image and
-video generation. A generating subagent also lights its ancestor chats; a normal
-fork does not. Background OCR/embedding never lights a chat. Unscheduled providers
-light up after their first output delta, since their prefill admission is not
-observable. Reduced-motion preferences disable the extra rotation.
+Queued chats remain grey with the normal slow rotation. The admitted conversation
+is blue and slow (1.5 seconds) during model loading, prefill, checkpoint work,
+image/video work, and between-step tool waits. Actual text, reasoning, or tool-call
+token deltas switch it to blue and fast (650 ms). If output stalls for 1.5 seconds,
+it returns to slow blue until tokens resume. The indicator clears at completion,
+cancellation, or handoff to another conversation. A working/generating subagent
+also lights its ancestor chats; ordinary forks and background OCR/embedding do not.
+Unscheduled provider streams use the same working/output phases. Reduced-motion
+preferences disable the added rotation.
 
 The plugin uses `session/event`, `llm/stream`, and `tools/execute` to associate work
 with sessions. One lightweight authenticated poll per visible browser page reads
