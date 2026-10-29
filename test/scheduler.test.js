@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {setTimeout as delay} from 'node:timers/promises';import {ModelScheduler} from '../lib/scheduler.js';
-function fixture(t,opts={}){const events=[],s=new ModelScheduler({idleMs:20,backgroundMs:20,...opts});t.after(()=>s.close());const driver=(key,extra={})=>({key,name:key,gpu:0,fingerprint:key,load:async()=>{events.push('load '+key);return key;},unload:async()=>events.push('unload '+key),...extra});return {s,events,driver};}
+function fixture(t,opts={}){const events=[],s=new ModelScheduler({idleMs:20,switchMs:0,backgroundMs:20,...opts});t.after(()=>s.close());const driver=(key,extra={})=>({key,name:key,gpu:0,fingerprint:key,load:async()=>{events.push('load '+key);return key;},unload:async()=>events.push('unload '+key),...extra});return {s,events,driver};}
 test('FIFO chat switching waits for release then switches immediately; matching model reuses',async t=>{const {s,driver,events}=fixture(t);const a=await s.acquire(driver('a'));let next=false;const b=s.acquire(driver('b')).then(x=>(next=true,x));await delay(25);assert.equal(next,false);a.release();const lease=await b;assert.equal(next,true);assert.deepEqual(events,['load a','unload a','load b']);lease.release();const reused=await s.acquire(driver('b'));assert.equal(events.length,3);reused.release();});
 test('aborted queued request never loads; unload explicitly aborts owned active request',async t=>{const {s,driver,events}=fixture(t);const a=await s.acquire(driver('a')),abort=new AbortController();const pending=s.acquire(driver('b'),abort.signal);abort.abort(new Error('cancelled'));await assert.rejects(pending,/cancelled/);await s.unload('a',{force:true});assert.equal(a.signal.aborted,true);assert.deepEqual(events,['load a','unload a']);a.release();});
 test('foreground precedes queued background and background yields at document boundary',async t=>{const {s,driver,events}=fixture(t,{yieldMs:50});const background=await s.acquire(driver('background',{priority:'background'}));const other=s.acquire(driver('other',{priority:'background'}));const chat=s.acquire(driver('chat'));background.release();const answer=await chat;assert.deepEqual(events,['load background','unload background','load chat']);answer.release();const b=await other;b.release();});
@@ -21,7 +21,7 @@ test('idle retention and waiting-model switch grace are independent',async t=>{
  assert.deepEqual(events,['load first']); // no contender: retain beyond switch grace
  const second=await s.acquire(driver('second'));assert.deepEqual(events,['load first','unload first','load second']);second.release();
 });
-test('waiting model switches immediately after a completed request without a pending turn',async t=>{
+test('waiting model switches after the completed request becomes quiet',async t=>{
  const {s,driver,events}=fixture(t,{idleMs:500,switchMs:35});
  const first=await s.acquire(driver('first'));const waiting=s.acquire(driver('second'));await delay(45);assert.deepEqual(events,['load first']);first.release();const next=await waiting;next.release();assert.deepEqual(events,['load first','unload first','load second']);
 });
@@ -30,8 +30,8 @@ test('cancelled contender returns to five-minute-style idle retention; timers ar
  const abort=new AbortController(),waiting=s.acquire(driver('second'),abort.signal);abort.abort(Error('cancelled'));await assert.rejects(waiting,/cancelled/);await delay(50);assert.deepEqual(events,['load first']);
  s.configure(0.2,0.01);assert.equal(s.status().idleSeconds,0.2);assert.equal(s.status().switchSeconds,0.01);assert.throws(()=>s.configure(300,-1),/Switch delay/);
 });
-test('new scheduler defaults retain for five minutes and switch after thirty seconds',async t=>{
- const s=new ModelScheduler();t.after(()=>s.close());assert.equal(s.status().idleSeconds,300);assert.equal(s.status().switchSeconds,30);
+test('new scheduler defaults retain for sixty seconds and switch after five quiet seconds',async t=>{
+ const s=new ModelScheduler();t.after(()=>s.close());assert.equal(s.status().idleSeconds,60);assert.equal(s.status().switchSeconds,5);
 });
 
 test('keep-warm chat survives idle timeout and configuration changes, but yields to another model',async t=>{
@@ -60,15 +60,15 @@ test('keep-warm never blocks image work, explicit unloading, or scheduler shutdo
 });
 
 
-test('a pending tool turn gets grace only while another model waits',async t=>{
+test('an already quiet model switches when a contender arrives',async t=>{
  const {s,driver,events}=fixture(t,{idleMs:500,switchMs:35});s.turnStarted('session');
  const first=await s.withSession('session',()=>s.acquire(driver('first')));first.release();
  await delay(45);assert.deepEqual(events,['load first']);
- const waiting=s.acquire(driver('second'));await delay(8);assert.deepEqual(events,['load first']);
+ const waiting=s.acquire(driver('second'));
  const next=await waiting;assert.deepEqual(events,['load first','unload first','load second']);next.release();
 });
-test('turn completion removes grace immediately',async t=>{
- const {s,driver,events}=fixture(t,{idleMs:500,switchMs:30000});s.turnStarted('session');
+test('turn completion preserves the quiet interval',async t=>{
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:25});s.turnStarted('session');
  const first=await s.withSession('session',()=>s.acquire(driver('first')));first.release();
  const waiting=s.acquire(driver('second'));await delay(5);assert.deepEqual(events,['load first']);s.turnEnded('session');
  const next=await waiting;next.release();assert.deepEqual(events,['load first','unload first','load second']);
@@ -94,7 +94,7 @@ test('completion of one shared-model session does not clear another pending turn
 });
 
 test('a driver that finishes its pending operation does not wait out the remaining grace',async t=>{
- const {s,driver,events}=fixture(t,{idleMs:500,switchMs:30000});let busy=false;
+ const {s,driver,events}=fixture(t,{idleMs:500,switchMs:25});let busy=false;
  (await s.acquire(driver('first',{busy:()=>busy}))).release();busy=true;
  const waiting=s.acquire(driver('second'));await delay(5);assert.deepEqual(events,['load first']);busy=false;
  const next=await Promise.race([waiting,delay(500).then(()=>{throw Error('Completed driver did not hand over promptly')})]);next.release();
@@ -140,10 +140,10 @@ test('new foreground inference resets the background delay and reuses the reside
  await delay(55);assert.deepEqual(events,['load chat']);
  (await waiting).release();assert.deepEqual(events,['load chat','unload chat','load ocr']);
 });
-test('background delay expiration never interrupts an unfinished foreground turn',async t=>{
+test('a tool pause can yield after the background quiet interval',async t=>{
  const {s,driver,events}=fixture(t,{idleMs:500,backgroundMs:10,switchMs:5});s.turnStarted('chat');
  (await s.withSession('chat',()=>s.acquire(driver('chat')))).release();
- const waiting=s.acquire(driver('ocr',{priority:'background'}));await delay(30);
+ const waiting=s.acquire(driver('ocr',{priority:'background'}));await delay(3);
  assert.deepEqual(events,['load chat']);s.turnEnded('chat');
  (await waiting).release();assert.deepEqual(events,['load chat','unload chat','load ocr']);
 });

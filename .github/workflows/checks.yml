@@ -15,6 +15,61 @@ jobs:
         with:
           version: '11.25.0'
       - run: pnpm install --ignore-scripts --config.strictDepBuilds=false
+      - run: pnpm run build
+      - run: git diff --exit-code -- client.js
       - run: pnpm run check
       - run: pnpm test
       - run: pnpm pack --out /tmp/plugin-ci.tgz
+  providers:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: averyjohnkucan-arch/dsh-strata
+          ref: 0bd196f6975d5e9e9be606e3e37490d3a99d2bd0
+          path: .providers/strata
+      - uses: actions/checkout@v4
+        with:
+          repository: averyjohnkucan-arch/dsh-ninfer
+          ref: 554644fc1ea7043593fff7f73b252716adef00c3
+          path: .providers/ninfer
+      - uses: actions/checkout@v4
+        with:
+          repository: averyjohnkucan-arch/dsh-dory
+          ref: 1e32198be1c52e6e755b4e1a1446b5f2adadf67f
+          path: .providers/dory
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11.25.0'
+      - name: Install provider test dependencies without native builds
+        run: |
+          pnpm --dir .providers/strata install --ignore-scripts --config.strictDepBuilds=false
+          pnpm --dir .providers/ninfer install --ignore-scripts --config.strictDepBuilds=false
+          pnpm --dir .providers/dory install --ignore-scripts --config.strictDepBuilds=false
+      - name: Verify real provider admission paths
+        run: node scripts/verify-providers.mjs .providers/strata .providers/ninfer .providers/dory
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, providers]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Publish tested plugin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then exit 0; fi
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+          gh release create "$tag" "$RUNNER_TEMP/dsh-model-scheduler-$version.tgz" --target "$GITHUB_SHA" --title "Model Scheduler $version" --notes-file docs/RELEASE.md

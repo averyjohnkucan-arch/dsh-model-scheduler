@@ -1,89 +1,279 @@
-window.__ModuleLoader__.load({id:'dsh-model-scheduler',factory(require){
- const React=require('react'),h=React.createElement,{useState,useEffect}=React;
- function installGenerationIndicators(ctx, require) {
- const {useSyncExternalStore} = React;
- const {StateDot} = require('@deepseek-ai/dsh-client-ui-primitives');
- let snapshot = {directSessionIds:[],activeSessionIds:[],directGeneratingSessionIds:[],generatingSessionIds:[]}, serial='', timer, controller, stopped=false;
- const listeners=new Set();
- const subscribe=listener=>{listeners.add(listener);return()=>listeners.delete(listener);};
- const getSnapshot=()=>snapshot;
- function publish(next){
-  const key=JSON.stringify(next);
-  if(key===serial)return;
-  serial=key;snapshot=next;for(const listener of listeners)listener();
- }
- async function refresh(){
-  if(stopped)return;
-  if(document.visibilityState==='hidden'){timer=setTimeout(refresh,1500);return;}
-  controller=new AbortController();const timeout=setTimeout(()=>controller?.abort(),3000);
-  try{
-   const cfg=window.__DSH_MODEL_SCHEDULER__;
-   if(!cfg)throw Error('Scheduler unavailable');
-   const response=await fetch(cfg.path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.token},body:JSON.stringify({action:'activity'}),signal:controller.signal});
-   if(!response.ok)throw Error('Scheduler unavailable');
-   const {result}=await response.json();
-   if(!Array.isArray(result?.activeSessionIds)||!Array.isArray(result?.directSessionIds))throw Error('Invalid activity');
-   if(!stopped)publish(result);
-  }catch{if(!stopped)publish({directSessionIds:[],activeSessionIds:[],directGeneratingSessionIds:[],generatingSessionIds:[]});}
-  finally{clearTimeout(timeout);controller=null;if(!stopped)timer=setTimeout(refresh,500);}
- }
- ctx.effect(()=>{refresh();return()=>{stopped=true;clearTimeout(timer);controller?.abort();listeners.clear();};});
-
- // Only the rotation is animated: a constant-speed compositor transform, with
- // no stepped dash animation. Keep the track dim and the arc unmistakably blue.
- const spinCSS=(selector,fast)=>`${selector}{color:#579bff!important}${selector}>g{animation:dsh-generation-spin ${fast?'.65s':'1.5s'} linear infinite!important;transform-origin:12px 12px;transform-box:view-box}${selector} circle{animation:none!important;stroke:currentColor!important}${selector} circle:first-child{opacity:.22}${selector} circle:last-child{opacity:1;stroke-dasharray:20 40;stroke-dashoffset:0}`;
- ctx.effect(()=>{
-  const style=document.createElement('style');style.dataset.plugin='dsh-model-scheduler';
-  style.textContent=`@keyframes dsh-generation-spin{to{transform:rotate(360deg)}}${spinCSS('.dsh-generation-working[data-state="ongoing"]',false)}${spinCSS('.dsh-generation-active[data-state="ongoing"]',true)}@media(prefers-reduced-motion:reduce){.dsh-generation-active[data-state="ongoing"]>g,.dsh-generation-working[data-state="ongoing"]>g{animation:none!important}}`;
-  document.head.appendChild(style);return()=>style.remove();
- });
- function useActive(useSessions){
-  const state=useSyncExternalStore(subscribe,getSnapshot,getSnapshot);
-  const catalog=useSessions(s=>s);
-  // Client catalog fills lineage for children already running when the plugin
-  // was enabled, and propagates activity through nested subagent trees.
-  const parents=new Map();
-  for(const [id,summary] of Object.entries(catalog.byId??{}))if(summary.origin==='subagent'&&summary.parentId)parents.set(id,summary.parentId);
-  for(const [parent,projection] of Object.entries(catalog.projectionsBySession??{}))for(const entry of projection.values?.subagentCatalog??[])if(entry.mode!=='external')parents.set(entry.id,parent);
-  const rollup=(all,direct)=>{const result=new Set(all??[]);for(const id of direct??[]){const seen=new Set([id]);let parent=parents.get(id);while(parent&&!seen.has(parent)){result.add(parent);seen.add(parent);parent=parents.get(parent);}}return result;};
-  return {working:rollup(state.activeSessionIds,state.directSessionIds),generating:rollup(state.generatingSessionIds,state.directGeneratingSessionIds)};
- }
- function RowActivity({sessionId,useSessions}){
-  const activity=useActive(useSessions),fast=activity.generating.has(sessionId);
-  if(!activity.working.has(sessionId))return null;
-  const selector=`[data-row-key="${CSS.escape('session:'+sessionId)}"]>span:first-child svg[data-state="ongoing"]`;
-  return h(React.Fragment,null,h('style',null,spinCSS(selector,fast)+`@media(prefers-reduced-motion:reduce){${selector}>g{animation:none!important}}`),h('span',{style:{position:'absolute',width:1,height:1,overflow:'hidden',clipPath:'inset(50%)'}},fast?'Generating tokens':'Working'));
- }
- ctx.slots.inject('sidebar.workspaces.session.row.action',()=>ctx.slots.register({name:'sidebar.workspaces.session.row.action',id:'dsh-generation-activity',order:1000},RowActivity));
-
- const ActivityContext=React.createContext({working:new Set(),generating:new Set()});
- function GenerationDot({sessionId,sessionIds=[],state}){
-  const active=React.useContext(ActivityContext);
-  const ids=[sessionId,...sessionIds],generating=ids.some(id=>active.generating.has(id)),working=ids.some(id=>active.working.has(id));
-  return h(StateDot,{state,className:generating?'dsh-generation-active':working?'dsh-generation-working':undefined});
- }
- const views=createSubagentViews(require,GenerationDot);
- // Supported slot priority shadowing keeps all changes in this plugin. The
- // upstream registrations still own navigation injection, locale and lifetime.
- function shadow(name,id,View){
-  ctx.slots.inject(name,()=>{
-   let source,dispose,updating=false;
-   const reconcile=()=>{
-    if(updating)return;updating=true;
-    try{
-     const next=ctx.slots.entries(name).find(entry=>entry.registrant==='@deepseek-ai/dsh-client-ui-subagent'&&(id===undefined||entry.options.id===id));
-     if(next===source)return;
-     dispose?.();dispose=undefined;source=next;if(!source)return;
-     function ActivityView(props){return h(ActivityContext.Provider,{value:useActive(props.useSessions)},h(View,props));}
-     dispose=ctx.slots.register({name,...source.options,priority:(source.options.priority??0)-1,inject:source.inject,locale:source.locale},ActivityView);
-    }finally{updating=false;}
-   };
-   const unsubscribe=ctx.slots.subscribe(name,reconcile);reconcile();
-   return()=>{unsubscribe();dispose?.();};
+window.__ModuleLoader__.load({
+  id: "dsh-model-scheduler",
+  factory(require) {
+    const React = require("react"),
+      h = React.createElement,
+      { useState, useEffect } = React;
+    function installGenerationIndicators(ctx, require) {
+  const { useSyncExternalStore } = React;
+  const { StateDot } = require("@deepseek-ai/dsh-client-ui-primitives");
+  let snapshot = { prefillingSessionIds: [], generatingSessionIds: [] },
+    serial = "",
+    timer,
+    controller,
+    stopped = false;
+  const listeners = new Set();
+  const subscribe = (listener) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  const getSnapshot = () => snapshot;
+  function publish(next) {
+    const key = JSON.stringify(next);
+    if (key === serial) return;
+    serial = key;
+    snapshot = next;
+    for (const listener of listeners) listener();
+  }
+  async function refresh() {
+    if (stopped) return;
+    if (document.visibilityState === "hidden") {
+      publish({ prefillingSessionIds: [], generatingSessionIds: [] });
+      timer = setTimeout(refresh, 1500);
+      return;
+    }
+    controller = new AbortController();
+    const timeout = setTimeout(() => controller?.abort(), 3000);
+    try {
+      const cfg = window.__DSH_MODEL_SCHEDULER__;
+      if (!cfg) throw Error("Activity service unavailable");
+      const response = await fetch(cfg.path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + cfg.token,
+        },
+        body: JSON.stringify({ action: "indicators" }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw Error("Activity service unavailable");
+      const { result } = await response.json();
+      if (
+        !Array.isArray(result?.prefillingSessionIds) ||
+        !Array.isArray(result?.generatingSessionIds)
+      )
+        throw Error("Invalid activity");
+      if (!stopped) publish(result);
+    } catch {
+      if (!stopped)
+        publish({ prefillingSessionIds: [], generatingSessionIds: [] });
+    } finally {
+      clearTimeout(timeout);
+      controller = null;
+      if (!stopped) timer = setTimeout(refresh, 250);
+    }
+  }
+  ctx.effect(() => {
+    refresh();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      controller?.abort();
+      listeners.clear();
+    };
   });
- }
- shadow('conversation.session.header.actions','subagent-catalog',views.SubagentCatalogAction);
- shadow('conversation.session.header.lineage',undefined,views.SubagentHeaderLineage);
+
+  const spinCSS = (selector, phase) =>
+    `${selector}{color:${phase === "generating" ? "#579bff" : "var(--dsw-alias-label-tertiary)"}!important}${selector}>g{animation:dsh-activity-spin .65s linear infinite!important;transform-origin:12px 12px;transform-box:view-box}${selector} circle{animation:none!important;stroke:currentColor!important}${selector} circle:first-child{opacity:.22}${selector} circle:last-child{opacity:1;stroke-dasharray:20 40;stroke-dashoffset:0}`;
+  ctx.effect(() => {
+    const style = document.createElement("style");
+    style.dataset.plugin = "dsh-model-scheduler";
+    style.textContent = `@keyframes dsh-activity-spin{to{transform:rotate(360deg)}}${spinCSS('html body .dsh-activity-prefill[data-state="ongoing"]', "prefill")}${spinCSS('html body .dsh-activity-generating[data-state="ongoing"]', "generating")}@media(prefers-reduced-motion:reduce){html body .dsh-activity-generating[data-state="ongoing"]>g,html body .dsh-activity-prefill[data-state="ongoing"]>g{animation:none!important}}`;
+    document.head.appendChild(style);
+    return () => style.remove();
+  });
+  function useActive(useSessions) {
+    const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const catalog = useSessions((s) => s);
+    // Client catalog fills lineage for children already running when the plugin
+    // was enabled, and propagates activity through nested subagent trees.
+    const parents = new Map();
+    for (const [id, summary] of Object.entries(catalog.byId ?? {}))
+      if (summary.origin === "subagent" && summary.parentId)
+        parents.set(id, summary.parentId);
+    for (const [parent, projection] of Object.entries(
+      catalog.projectionsBySession ?? {},
+    ))
+      for (const entry of projection.values?.subagentCatalog ?? [])
+        if (entry.mode !== "external") parents.set(entry.id, parent);
+    const rollup = (all, direct) => {
+      const result = new Set([...(all ?? []), ...(direct ?? [])]);
+      for (const id of direct ?? []) {
+        const seen = new Set([id]);
+        let parent = parents.get(id);
+        while (parent && !seen.has(parent)) {
+          result.add(parent);
+          seen.add(parent);
+          parent = parents.get(parent);
+        }
+      }
+      return result;
+    };
+    return {
+      prefilling: rollup([], state.prefillingSessionIds),
+      generating: rollup([], state.generatingSessionIds),
+    };
+  }
+  function RowActivity({ sessionId, useSessions }) {
+    const activity = useActive(useSessions),
+      phase = activity.generating.has(sessionId)
+        ? "generating"
+        : activity.prefilling.has(sessionId)
+          ? "prefill"
+          : undefined;
+    const selector = `html body [data-row-key="${CSS.escape("session:" + sessionId)}"]>span:first-child svg[data-state="ongoing"]`;
+    // Queues and tool waits retain the native slow grey indication.
+    const neutral = `${selector}{color:var(--dsw-alias-label-tertiary)!important}${selector}>g{animation:dsh-activity-spin 1.5s linear infinite!important;transform-origin:12px 12px}${selector} circle{animation:none!important;stroke:currentColor!important}`;
+    return h(
+      React.Fragment,
+      null,
+      h(
+        "style",
+        null,
+        (phase ? spinCSS(selector, phase) : neutral) +
+          `@media(prefers-reduced-motion:reduce){${selector}>g{animation:none!important}}`,
+      ),
+      phase &&
+        h(
+          "span",
+          {
+            style: {
+              position: "absolute",
+              width: 1,
+              height: 1,
+              overflow: "hidden",
+              clipPath: "inset(50%)",
+            },
+          },
+          phase === "generating"
+            ? "Generating output"
+            : "Prefilling / waiting for first token",
+        ),
+    );
+  }
+  ctx.slots.inject("sidebar.workspaces.session.row.action", () =>
+    ctx.slots.register(
+      {
+        name: "sidebar.workspaces.session.row.action",
+        id: "dsh-model-scheduler",
+        order: 1000,
+      },
+      RowActivity,
+    ),
+  );
+
+  const ActivityContext = React.createContext({
+    prefilling: new Set(),
+    generating: new Set(),
+  });
+  function GenerationDot({ sessionId, sessionIds = [], state }) {
+    const active = React.useContext(ActivityContext);
+    const ids = [sessionId, ...sessionIds],
+      generating = ids.some((id) => active.generating.has(id)),
+      prefilling = ids.some((id) => active.prefilling.has(id));
+    const phase = generating
+      ? "generating"
+      : prefilling
+        ? "prefill"
+        : undefined;
+    const dot = h(StateDot, {
+      state,
+      className: phase ? "dsh-activity-" + phase : undefined,
+    });
+    return phase
+      ? h(
+          "span",
+          {
+            style: { display: "inline-flex" },
+            role: "img",
+            "aria-label":
+              phase === "generating"
+                ? "Generating output"
+                : "Prefilling / waiting for first token",
+            title:
+              phase === "generating"
+                ? "Generating output"
+                : "Prefilling / waiting for first token",
+          },
+          dot,
+        )
+      : dot;
+  }
+  const views = createSubagentViews(require, GenerationDot);
+  // Supported slot priority shadowing keeps all changes in this plugin. The
+  // upstream registrations still own navigation injection, locale and lifetime.
+  function shadow(name, id, View) {
+    ctx.slots.inject(name, () => {
+      let source,
+        priority,
+        dispose,
+        updating = false;
+      const reconcile = () => {
+        if (updating) return;
+        updating = true;
+        try {
+          const next = ctx.slots
+            .entries(name)
+            .find(
+              (entry) =>
+                entry.registrant === "@deepseek-ai/dsh-client-ui-subagent" &&
+                (id === undefined || entry.options.id === id),
+            );
+          const others = ctx.slots
+            .entries(name)
+            .filter(
+              (entry) =>
+                entry.registrant !== "dsh-model-scheduler" &&
+                (id === undefined || entry.options.id === id),
+            );
+          const nextPriority =
+            Math.min(0, ...others.map((entry) => entry.options.priority ?? 0)) -
+            1;
+          if (next === source && nextPriority === priority) return;
+          priority = nextPriority;
+          dispose?.();
+          dispose = undefined;
+          source = next;
+          if (!source) return;
+          function ActivityView(props) {
+            return h(
+              ActivityContext.Provider,
+              { value: useActive(props.useSessions) },
+              h(View, props),
+            );
+          }
+          dispose = ctx.slots.register(
+            {
+              name,
+              ...source.options,
+              priority,
+              inject: source.inject,
+              locale: source.locale,
+            },
+            ActivityView,
+          );
+        } finally {
+          updating = false;
+        }
+      };
+      const unsubscribe = ctx.slots.subscribe(name, reconcile);
+      reconcile();
+      return () => {
+        unsubscribe();
+        dispose?.();
+      };
+    });
+  }
+  shadow(
+    "conversation.session.header.actions",
+    "subagent-catalog",
+    views.SubagentCatalogAction,
+  );
+  shadow(
+    "conversation.session.header.lineage",
+    undefined,
+    views.SubagentHeaderLineage,
+  );
 }
 
 // Subagent catalog presentation adapted from @deepseek-ai/dsh-client-ui-subagent 0.2.1-rc.2.
@@ -738,21 +928,221 @@ function createSubagentViews(require, GenerationDot) {
  return {SubagentCatalogAction,SubagentHeaderLineage};
 }
 
- return{inject:['slots','locale'],apply(ctx){
-  installGenerationIndicators(ctx,require);
-  ctx.effect(()=>ctx.locale.register('dsh-model-scheduler',{'en':{}}));
-  function Card(){const[data,setData]=useState(null),[seconds,setSeconds]=useState(null),[switchSeconds,setSwitchSeconds]=useState(null),[backgroundSeconds,setBackgroundSeconds]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
-   async function api(action,payload={}){const cfg=window.__DSH_MODEL_SCHEDULER__;if(!cfg)throw new Error('Restart DSH to connect the scheduler.');const r=await fetch(cfg.path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.token},body:JSON.stringify({action,payload})});const d=await r.json();if(!r.ok)throw new Error(d.error);return d.result;}
-   useEffect(()=>{let alive=true;const refresh=()=>api('list').then(d=>{if(alive)setData(d);}).catch(e=>{if(alive)setError(e.message);});refresh();const timer=setInterval(refresh,1500);return()=>{alive=false;clearInterval(timer);};},[]);
-   async function act(action,payload){setBusy(true);setError('');try{await api(action,payload);setData(await api('list'));}catch(e){setError(e.message);}finally{setBusy(false);}}
-   return h('section',{className:'dsh-scheduler',style:{marginTop:16,padding:16,border:'1px solid var(--dsw-alias-settings-card-stroke)',borderRadius:12,background:'var(--dsw-alias-settings-card-fill)'}},
-    h('style',null,`.dsh-scheduler{font:inherit;font-size:14px;color:var(--dsw-alias-label-primary)}.dsh-scheduler h3{font-size:15px;font-weight:500;margin:0}.dsh-scheduler p{color:var(--dsw-alias-label-secondary);line-height:1.5}.dsh-scheduler button,.dsh-scheduler input{font:inherit;color:inherit;border:1px solid var(--dsw-alias-border-l3);border-radius:8px;background:var(--dsw-alias-bg-layer-1);padding:7px 10px}.dsh-scheduler button{cursor:pointer}.dsh-scheduler button:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-scheduler button:disabled{opacity:.5;cursor:default}.dsh-scheduler :focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.dsh-scheduler input{width:90px;margin:0 8px}`),h('h3',null,'Model Scheduler'),h('p',null,'Keep an unused model loaded for up to 5 minutes by default. A completed or stopped turn switches immediately when another foreground model waits. An unfinished turn waiting between inference calls gets up to 30 seconds from the competing request; active generation finishes first. Background OCR and embeddings wait two minutes after the last foreground inference and until its turn ends; chat requests always take priority. Only registered engines can be managed.'),
-    h('label',null,'Idle retention with no waiting model (seconds) ',h('input',{type:'number',min:0,max:86400,value:seconds??data?.idleSeconds??300,onChange:e=>setSeconds(e.target.value)})),h('label',null,'Unfinished-turn grace when another model waits (seconds) ',h('input',{type:'number',min:0,max:86400,value:switchSeconds??data?.switchSeconds??30,onChange:e=>setSwitchSeconds(e.target.value)})),h('label',null,'Background GPU delay after inference (seconds) ',h('input',{type:'number',min:0,max:86400,value:backgroundSeconds??data?.backgroundSeconds??120,onChange:e=>setBackgroundSeconds(e.target.value)})),h('button',{disabled:busy,onClick:()=>act('configure',{idleSeconds:Number(seconds??data?.idleSeconds??300),switchSeconds:Number(switchSeconds??data?.switchSeconds??30),backgroundSeconds:Number(backgroundSeconds??data?.backgroundSeconds??120)})},'Save'),
-    error&&h('p',{role:'alert'},error),data?.devices.map(d=>h('p',{key:d.gpu},'GPU '+d.gpu+': '+(d.model||'idle')+' · '+d.phase+(d.keepWarm?' · keeping cache warm':'')+' · '+d.queue.length+' waiting',d.error?' · '+d.error:'')),
-    data?.gpuProcesses?.length>0&&h('details',null,h('summary',null,'GPU processes, including applications outside DSH'),h('p',null,'Detection is read-only. Only registered drivers can be unloaded; other applications are never killed.'),data.gpuProcesses.map(p=>h('p',{key:p.pid},p.name+' · PID '+p.pid+' · '+p.memoryMiB+' MiB'))),
-    data?.models.map(m=>h('div',{key:m.key,style:{display:'flex',gap:8,alignItems:'center',padding:'8px 0'}},h('span',{style:{flex:1}},m.name),h('button',{disabled:busy,onClick:()=>act('load',{key:m.key})},'Load'),h('button',{onClick:()=>act('unload',{key:m.key,force:true})},'Unload')))
-   );
-  }
-  ctx.slots.inject('settings.models.footer',()=>ctx.slots.register({name:'settings.models.footer',id:'dsh-model-scheduler',order:5},Card));
- }};
-}});
+    return {
+      inject: ["slots", "locale"],
+      apply(ctx) {
+        installGenerationIndicators(ctx, require);
+        ctx.effect(() =>
+          ctx.locale.register("dsh-model-scheduler", { en: {} }),
+        );
+        function Card() {
+          const [data, setData] = useState(null),
+            [seconds, setSeconds] = useState(null),
+            [switchSeconds, setSwitchSeconds] = useState(null),
+            [backgroundSeconds, setBackgroundSeconds] = useState(null),
+            [error, setError] = useState(""),
+            [busy, setBusy] = useState(false);
+          async function api(action, payload = {}) {
+            const cfg = window.__DSH_MODEL_SCHEDULER__;
+            if (!cfg) throw new Error("Restart DSH to connect the scheduler.");
+            const r = await fetch(cfg.path, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: "Bearer " + cfg.token,
+              },
+              body: JSON.stringify({ action, payload }),
+            });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error);
+            return d.result;
+          }
+          useEffect(() => {
+            let alive = true;
+            const refresh = () =>
+              api("list")
+                .then((d) => {
+                  if (alive) setData(d);
+                })
+                .catch((e) => {
+                  if (alive) setError(e.message);
+                });
+            refresh();
+            const timer = setInterval(refresh, 1500);
+            return () => {
+              alive = false;
+              clearInterval(timer);
+            };
+          }, []);
+          async function act(action, payload) {
+            setBusy(true);
+            setError("");
+            try {
+              await api(action, payload);
+              setData(await api("list"));
+            } catch (e) {
+              setError(e.message);
+            } finally {
+              setBusy(false);
+            }
+          }
+          return h(
+            "section",
+            {
+              className: "dsh-scheduler",
+              style: {
+                marginTop: 16,
+                padding: 16,
+                border: "1px solid var(--dsw-alias-settings-card-stroke)",
+                borderRadius: 12,
+                background: "var(--dsw-alias-settings-card-fill)",
+              },
+            },
+            h(
+              "style",
+              null,
+              `.dsh-scheduler{font:inherit;font-size:14px;color:var(--dsw-alias-label-primary)}.dsh-scheduler h3{font-size:15px;font-weight:500;margin:0}.dsh-scheduler p{color:var(--dsw-alias-label-secondary);line-height:1.5}.dsh-scheduler button,.dsh-scheduler input{font:inherit;color:inherit;border:1px solid var(--dsw-alias-border-l3);border-radius:8px;background:var(--dsw-alias-bg-layer-1);padding:7px 10px}.dsh-scheduler button{cursor:pointer}.dsh-scheduler button:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-scheduler button:disabled{opacity:.5;cursor:default}.dsh-scheduler :focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.dsh-scheduler input{width:90px;margin:0 8px}`,
+            ),
+            h("h3", null, "Model Scheduler"),
+            h(
+              "p",
+              null,
+              "Keep a model loaded for 60 seconds without requests. When another model waits, switch after 5 quiet seconds. Requests for the loaded model run together across chats and restart that timer. Active answers and checkpoint saves finish first. Fast grey means waiting for first output; fast blue means generating. Only registered engines are managed.",
+            ),
+            h(
+              "label",
+              null,
+              "Idle retention with no waiting model (seconds) ",
+              h("input", {
+                type: "number",
+                min: 0,
+                max: 86400,
+                value: seconds ?? data?.idleSeconds ?? 60,
+                onChange: (e) => setSeconds(e.target.value),
+              }),
+            ),
+            h(
+              "label",
+              null,
+              "Quiet period when another model waits (seconds) ",
+              h("input", {
+                type: "number",
+                min: 0,
+                max: 86400,
+                value: switchSeconds ?? data?.switchSeconds ?? 5,
+                onChange: (e) => setSwitchSeconds(e.target.value),
+              }),
+            ),
+            h(
+              "label",
+              null,
+              "Quiet period for waiting background models (seconds) ",
+              h("input", {
+                type: "number",
+                min: 0,
+                max: 86400,
+                value: backgroundSeconds ?? data?.backgroundSeconds ?? 5,
+                onChange: (e) => setBackgroundSeconds(e.target.value),
+              }),
+            ),
+            h(
+              "button",
+              {
+                disabled: busy,
+                onClick: () =>
+                  act("configure", {
+                    idleSeconds: Number(seconds ?? data?.idleSeconds ?? 60),
+                    switchSeconds: Number(
+                      switchSeconds ?? data?.switchSeconds ?? 5,
+                    ),
+                    backgroundSeconds: Number(
+                      backgroundSeconds ?? data?.backgroundSeconds ?? 5,
+                    ),
+                  }),
+              },
+              "Save",
+            ),
+            error && h("p", { role: "alert" }, error),
+            data?.devices.map((d) =>
+              h(
+                "p",
+                { key: d.gpu },
+                "GPU " +
+                  d.gpu +
+                  ": " +
+                  (d.model || "idle") +
+                  " · " +
+                  d.phase +
+                  (d.keepWarm ? " · keeping cache warm" : "") +
+                  " · " +
+                  d.queue.length +
+                  " waiting",
+                d.error ? " · " + d.error : "",
+              ),
+            ),
+            data?.gpuProcesses?.length > 0 &&
+              h(
+                "details",
+                null,
+                h(
+                  "summary",
+                  null,
+                  "GPU processes, including applications outside DSH",
+                ),
+                h(
+                  "p",
+                  null,
+                  "Detection is read-only. Only registered drivers can be unloaded; other applications are never killed.",
+                ),
+                data.gpuProcesses.map((p) =>
+                  h(
+                    "p",
+                    { key: p.pid },
+                    p.name + " · PID " + p.pid + " · " + p.memoryMiB + " MiB",
+                  ),
+                ),
+              ),
+            data?.models.map((m) =>
+              h(
+                "div",
+                {
+                  key: m.key,
+                  style: {
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    padding: "8px 0",
+                  },
+                },
+                h("span", { style: { flex: 1 } }, m.name),
+                h(
+                  "button",
+                  {
+                    disabled: busy,
+                    onClick: () => act("load", { key: m.key }),
+                  },
+                  "Load",
+                ),
+                h(
+                  "button",
+                  { onClick: () => act("unload", { key: m.key, force: true }) },
+                  "Unload",
+                ),
+              ),
+            ),
+          );
+        }
+        ctx.slots.inject("settings.models.footer", () =>
+          ctx.slots.register(
+            {
+              name: "settings.models.footer",
+              id: "dsh-model-scheduler",
+              order: 5,
+            },
+            Card,
+          ),
+        );
+      },
+    };
+  },
+});

@@ -1,26 +1,45 @@
 # DSH Model Scheduler
 
-A separate Cordis plugin for DeepSeek Harness 0.2.1-rc.2. Install this repository through DSH's plugin installer, or use `dsh plugin --profile web add link:/absolute/path/dsh-model-scheduler` for local development.
+Shared GPU model handoff and conversation activity indicators for DeepSeek Harness 0.2.1-rc.2. No Harness or native-engine patches are needed.
 
-The Models settings page exposes the idle retention (300 seconds by default) and a separate model-switch grace (30 seconds by default), registered models, load/unload controls, current GPU owner and waiting requests. Strata and NInfer remain independent plugins; when this service is installed, they request admission through it. No Harness core patches are required.
+## Install
 
-The scheduler serializes managed requests on each GPU. A fully completed or stopped turn switches to another queued model immediately after the owned process confirms unloading. The 30-second grace applies only when another model is waiting while the existing turn still has tool work or another between-inference wait. The grace starts when the competing request queues, not after completion; ending the turn removes the delay immediately. A continuation of the current turn may reuse its model within the grace without resetting the contender's deadline. An active generation finishes before another model loads; the existing 30-second preemption deadline for background workers remains separate.
+Paste `https://github.com/averyjohnkucan-arch/dsh-model-scheduler#v0.2.0` into **Plugins → Add plugin**, enable it, then restart DSH and reload the page. Use Strata 0.6.4+, NInfer 0.4.3+ and Dory 0.2.1+ for the coordinated paths verified with this release. Existing saved profiles and native tuning settings stay in their provider plugins.
 
-With no competing request, an unused model stays loaded for up to five minutes (or stays warm if its driver requests that). The idle retention, waiting-turn grace and background admission delay are independently configurable. Cancelling the contender preserves normal idle retention. Public `session/event` and `llm/stream` hooks associate sessions and leases inside this plugin; Strata and NInfer need no turn-tracking changes. Drivers without a DSH session have request-level tracking: after their lease releases and any busy operation completes, handoff is immediate. Queues preserve arrival order, with interactive requests ahead of background work. Cancelling a queued chat removes it without loading its model.
+The activity indicators are included here. Disable and uninstall the old `dsh-activity-indicators` plugin if it is installed; only this scheduler plugin is needed.
 
-Unloading stops the process tree owned by its engine plugin. An external server cannot be forcibly unloaded: the scheduler reports that its owner must stop it. It also refuses to admit another model after a failed unload.
+## Handoff policy
 
-## Background integration
+- With no other model waiting, unload after **60 seconds** without a request.
+- When a different model waits, switch after **5 quiet seconds** since the last request released its lease. An active answer and checkpoint save finish before that clock starts.
+- Drain queued requests for the resident model across conversations, in arrival order within that model. A new request for it during the quiet interval runs immediately and restarts the clock after finishing.
+- Tool calls, questions and turn boundaries can create the required pause. Completing a turn does not bypass the five seconds; a long tool call does not retain the GPU forever.
+- A cancelled contender is removed without loading. If no contenders remain, the normal 60-second idle deadline applies. Each GPU has its own queue.
 
-Plugins may optionally inject the Cordis `modelScheduler` service and call `acquire(driver, signal)`. A driver supplies `key`, `name`, `gpu`, `fingerprint`, `load(signal)`, and `unload()`. Background drivers set `priority: 'background'`. They wait for the current foreground turn to finish and for 120 seconds (configurable) after its last inference lease releases. A new foreground request resets this quiet period; another chat always goes ahead of queued background work. This delay also applies to keep-warm models, which retain their cache while background work waits. It is separate from the five-minute idle retention and 30-second unfinished-turn grace for competing foreground requests. The returned lease contains `state`, an abortable `signal`, and an idempotent `release()`.
+For example, with two Flash Next conversations and two 27B conversations, Flash Next serves both of its queued conversations without reloading. After five seconds with no Flash Next request, it unloads and the 27B batch runs. A continuous supply of requests for the resident model can therefore keep other models waiting until a quiet gap.
 
-A driver may set `keepWarm: true` to skip idle unloading while nothing else is waiting. This preserves an in-memory conversation cache. It still yields to another queued model under the pending-turn policy, exclusive image work, manual unload and shutdown. This per-model setting does not change the global idle timer for other models; status reports `keepWarm` and the Models card shows when cache retention is active.
+The Models settings card shows the GPU owner, waiting requests and registered providers. The idle, foreground-switch and background-switch quiet periods are configurable; new installs default to 60/5/5 seconds. Existing explicitly saved timings remain in effect until changed in settings. An explicit driver `keepWarm` request skips idle unloading when nothing else waits; it does not block another model. Exclusive tools and manual unload have explicit handoff paths.
 
-Release a background lease at a document boundary. A waiting chat causes immediate unloading at that boundary; after 30 seconds the lease is aborted and `unload()` must terminate its GPU worker and confirm memory release. The caller should retry the interrupted document on CPU without publishing partial results. This service is cooperative: it cannot move an arbitrary third-party worker to a different device, intercept every OS process, or make a CPU-only runtime execute on CUDA. Knowledge GPU integration must be implemented and qualified by the knowledge plugin separately.
+Only registered provider processes can be unloaded. Unknown GPU applications are never killed. A failed unload blocks admission until its owner can release the GPU.
 
-Lifecycle policy lives here. Engine-specific cache formats and process ownership stay in their provider plugins. No requirement for Strata and NInfer to talk directly to each other.
+## Activity indicators
 
-Run `node --test test/*.test.js` for queue, cancellation, priority, deadline and unload failure checks.
+| State | Indicator |
+| --- | --- |
+| Queued or between model calls | Normal slow grey spinner |
+| Admitted call awaiting first output | Fast grey spinner |
+| Text, reasoning or tool-call output | Fast blue spinner |
+| Finished, cancelled, approval or question | Native DSH status |
+
+Blue persists through gaps between chunks until that model call ends. Each new call starts grey. Nested subagent activity rolls up through its ancestor chats; ordinary chat forks do not affect parents. Reduced-motion preferences disable the added rotation. Fast grey can include model loading, checkpoint restore and network latency; it is not a measurement of GPU prefill kernels. One authenticated read-only poll updates phases while the browser is visible.
+
+The indicator implementation was merged from `dsh-activity-indicators` revision `608312452fc3d66656739256f887b03e1be469b4`. The old standalone repository can be removed after this release is published. Adapted DSH subagent views retain their MIT notice in THIRD_PARTY_LICENSES.md.
+
+## Provider integration
+
+Optionally inject the Cordis `modelScheduler` service and call `acquire(driver, signal)`. A driver supplies `key`, `name`, `gpu`, `fingerprint`, `load(signal)` and `unload()`. Keep the lease through generation and checkpoint IO; release it in a finally block. Drivers own process termination and must confirm unloading before returning. The scheduler does not guess PIDs or cache formats.
+
+Background drivers set `priority: 'background'` and release at a document boundary. Foreground requests precede background work. Background admission uses its own configurable quiet timer, also five seconds by default. An active background worker may be asked to yield after its separate 30-second preemption deadline; its owner must stop the worker and retry incomplete work on CPU.
 
 ## Exclusive image/video tools
 
@@ -32,30 +51,8 @@ The Models card lists detected NVIDIA GPU compute processes, including applicati
 
 Background plugins can register `registerResourceGuard(id, async ({gpu, key, signal}) => release)` on the optional `modelScheduler` Cordis service. Before every interactive load or reuse (including image rendering and automatic chat restoration), the scheduler waits for these guards to finish releasing background device workers. It holds their returned, idempotently released reservations for the inference lease. Failed reservations prevent model startup; earlier reservations are released. Background leases do not reserve foreground resources. Plugins own and stop their own workers; the scheduler never guesses or kills external processes. Knowledge uses this hook to yield its GPU embedding workers while leaving CPU and NPU lanes available.
 
-## Generation indicators
+## Development
 
-Queued chats remain grey with the normal slow rotation. The admitted conversation
-is blue and slow (1.5 seconds) during model loading, prefill, checkpoint work,
-image/video work, and between-step tool waits. Actual text, reasoning, or tool-call
-token deltas switch it to blue and fast (650 ms). If output stalls for 1.5 seconds,
-it returns to slow blue until tokens resume. The indicator clears at completion,
-cancellation, or handoff to another conversation. A working/generating subagent
-also lights its ancestor chats; ordinary forks and background OCR/embedding do not.
-Unscheduled provider streams use the same working/output phases. Reduced-motion
-preferences disable the added rotation.
+The sidebar uses its row-action slot for scoped styles. DSH 0.2.1-rc.2 has no individual subagent indicator slot, so the two catalog presentation slots use supported priority shadowing. The adapted view preserves navigation, keyboard handling, metrics and locale. No Harness files are modified; removing the plugin restores its standard views.
 
-The plugin uses `session/event`, `llm/stream`, and `tools/execute` to associate work
-with sessions. One lightweight authenticated poll per visible browser page reads
-activity every 500 ms; it does not query NVIDIA, write to disk, or start models.
-Failed/disconnected polls clear the blue state.
-
-The sidebar uses its row-action slot to supply scoped styles. DSH 0.2.1-rc.2 has no
-per-subagent indicator slot, so the plugin shadows only the two subagent catalog
-presentation slots using the supported priority mechanism. Its local, MIT-licensed
-view preserves the upstream navigation, keyboard handling, metrics and locale;
-only its status indicators change. See `client/subagent-views.js` and
-`THIRD_PARTY_LICENSES.md`. Removing the plugin restores the standard views.
-No Harness files or other plugins are modified.
-
-After editing the client sources, run `npm run build` to regenerate `client.js`,
-then `npm run check` and `npm test`.
+After editing client sources, run `npm run build`, `npm run check` and `npm test`. The suite covers timing, model batches, cancellation, lifecycle, authentication, phase tracking and rendered subagent indicators. `scripts/verify-providers.mjs` checks the actual Strata, NInfer and Dory runtime classes with simulated servers; CI pins their source revisions.

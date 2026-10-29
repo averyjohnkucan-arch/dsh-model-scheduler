@@ -17,7 +17,7 @@ test('scheduler plugin tracks public turn events and releases a waiting model at
   ctx.provide('webServer',{register:()=>()=>{},getOrigin:()=> 'http://127.0.0.1:3080'});
   ctx.provide('llm',{});
   const {apply}=await import('../index.js');
-  await ctx.plugin({name:'scheduler-hooks',apply:scope=>apply(scope,{idleSeconds:300,switchSeconds:30})});
+  await ctx.plugin({name:'scheduler-hooks',apply:scope=>apply(scope,{idleSeconds:60,switchSeconds:0.02})});
   const scheduler=ctx.get('modelScheduler'),events=[];
   const driver=key=>({key,name:key,gpu:0,fingerprint:key,load:async()=>events.push('load '+key),unload:async()=>events.push('unload '+key)});
   ctx.emit('session/event',{id:'s'},{type:'turn/start'});

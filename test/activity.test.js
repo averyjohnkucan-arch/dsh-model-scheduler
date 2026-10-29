@@ -84,8 +84,8 @@ test('working and generating states independently roll up to the parent',()=>{
  const stream=a.open('child');assert.deepEqual(a.snapshot([]).activeSessionIds,['child','parent']);assert.deepEqual(a.snapshot([]).generatingSessionIds,[]);
  stream.pulse();assert.deepEqual(a.snapshot([]).generatingSessionIds,['child','parent']);stream.pause();assert.deepEqual(a.snapshot([]).generatingSessionIds,[]);
 });
-test('an idle model switches immediately even with a 30-second pending-turn grace',async t=>{
- const s=new ModelScheduler({idleMs:300000,switchMs:30000});t.after(()=>s.close());
+test('an idle model observes the quiet timer even between turns',async t=>{
+ const s=new ModelScheduler({idleMs:300000,switchMs:20});t.after(()=>s.close());
  s.turnStarted('chat');(await s.withSession('chat',()=>s.acquire(driver('a')))).release();s.turnEnded('chat');s.turnStarted('chat');
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(Error('Unexpected switch delay')),250);
  try{const lease=await s.withSession('chat',()=>s.acquire(driver('b'),controller.signal));assert.equal(s.device(0).current.driver.key,'b');lease.release();}finally{clearTimeout(timer);s.turnEnded('chat');}
