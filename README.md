@@ -56,3 +56,5 @@ Background plugins can register `registerResourceGuard(id, async ({gpu, key, sig
 The sidebar uses its row-action slot for scoped styles. DSH 0.2.1-rc.2 has no individual subagent indicator slot, so the two catalog presentation slots use supported priority shadowing. The adapted view preserves navigation, keyboard handling, metrics and locale. No Harness files are modified; removing the plugin restores its standard views.
 
 After editing client sources, run `npm run build`, `npm run check` and `npm test`. The suite covers timing, model batches, cancellation, lifecycle, authentication, phase tracking and rendered subagent indicators. `scripts/verify-providers.mjs` checks the actual Strata, NInfer and Dory runtime classes with simulated servers; CI pins their source revisions.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for supported DSH versions and upgrade checks.
