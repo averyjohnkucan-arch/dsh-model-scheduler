@@ -2,3 +2,7 @@ node_modules/
 .engine/
 *.log
 .providers/
+
+# DSH compatibility workflow scratch data
+.compat-home/
+.compat-packed/
