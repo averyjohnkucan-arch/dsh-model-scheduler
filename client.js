@@ -202,12 +202,15 @@ window.__ModuleLoader__.load({
   const views = createSubagentViews(require, GenerationDot);
   // Supported slot priority shadowing keeps all changes in this plugin. The
   // upstream registrations still own navigation injection, locale and lifetime.
+  // Anonymous Cordis plugins inherit the parent fiber name (often "root").
+  // Match the native renderer instead of treating its diagnostics label as an ID.
   function shadow(name, id, View) {
     ctx.slots.inject(name, () => {
       let source,
         priority,
         dispose,
-        updating = false;
+        updating = false,
+        ownComponent = null;
       const reconcile = () => {
         if (updating) return;
         updating = true;
@@ -216,14 +219,14 @@ window.__ModuleLoader__.load({
             .entries(name)
             .find(
               (entry) =>
-                entry.registrant === "@deepseek-ai/dsh-client-ui-subagent" &&
+                entry.component?.name === View.name &&
                 (id === undefined || entry.options.id === id),
             );
           const others = ctx.slots
             .entries(name)
             .filter(
               (entry) =>
-                entry.registrant !== "dsh-model-scheduler" &&
+                entry.component !== ownComponent &&
                 (id === undefined || entry.options.id === id),
             );
           const nextPriority =
@@ -242,6 +245,7 @@ window.__ModuleLoader__.load({
               h(View, props),
             );
           }
+          ownComponent = ActivityView;
           dispose = ctx.slots.register(
             {
               name,
@@ -249,6 +253,7 @@ window.__ModuleLoader__.load({
               priority,
               inject: source.inject,
               locale: source.locale,
+              registrant: "dsh-model-scheduler",
             },
             ActivityView,
           );

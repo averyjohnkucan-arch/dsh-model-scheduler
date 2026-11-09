@@ -27,3 +27,13 @@ test('scheduler plugin tracks public turn events and releases a waiting model at
   (await pending).release();assert.deepEqual(events,['load a','unload a','load b']);
  }finally{await ctx.fiber.dispose();if(prior===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=prior;await rm(root,{recursive:true,force:true});}
 });
+
+
+test('anonymous browser plugins inherit root rather than their module ID', async () => {
+ const ctx = new Context();
+ try {
+  let registrant;
+  await ctx.plugin({apply(scope) { registrant = scope.fiber.name; }});
+  assert.equal(registrant, 'root');
+ } finally { await ctx.fiber.dispose(); }
+});

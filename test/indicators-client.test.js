@@ -16,7 +16,8 @@ test("built client decorates rows, shadows subagent views, rolls up nested child
     timers = new Map();
   let timerId = 0;
   const native = (name, id) => ({
-    registrant: "@deepseek-ai/dsh-client-ui-subagent",
+    registrant: "root",
+    component: name === "actions" ? function SubagentCatalogAction() {} : function SubagentHeaderLineage() {},
     options: { id },
     inject: {},
     locale: "native",
@@ -126,6 +127,13 @@ test("built client decorates rows, shadows subagent views, rolls up nested child
   );
   assert.equal(shadow.options.priority, -2);
   assert.equal(shadow.options.locale, "native");
+  // Anonymous native plugins are stamped "root" by the real Cordis runtime.
+  // Reconciliation must ignore its own renderer and retain a stable priority.
+  const initialRegistrations = registrations.length;
+  for (const reconcile of callbacks) reconcile();
+  assert.equal(registrations.length, initialRegistrations);
+  assert.ok(registrations.includes(shadow), "reconciliation preserves the existing renderer");
+  assert.equal(shadow.options.priority, -2);
   const catalog = {
     byId: {
       child: { origin: "subagent", parentId: "root" },
@@ -237,6 +245,18 @@ test("built client decorates rows, shadows subagent views, rolls up nested child
     ).length,
     3,
   );
+  // Each nested row follows its own live phase, not just the parent's spinner.
+  next = { prefillingSessionIds: ["grandchild"], generatingSessionIds: [] };
+  await poll();
+  assert.equal(dropdown.root.findAll(node => node.type === "svg" && node.props.className === "dsh-activity-prefill").length, 3);
+  next = { prefillingSessionIds: ["grandchild"], generatingSessionIds: ["child"] };
+  await poll();
+  const treeRows = dropdown.root.findAllByProps({role: "treeitem"});
+  assert.equal(treeRows[0].findAll(node => node.type === "svg" && node.props.className === "dsh-activity-generating").length, 1);
+  assert.equal(treeRows[1].findAll(node => node.type === "svg" && node.props.className === "dsh-activity-prefill").length, 1);
+  next = { prefillingSessionIds: [], generatingSessionIds: [] };
+  await poll();
+  assert.equal(dropdown.root.findAll(node => node.type === "svg" && node.props.className?.startsWith("dsh-activity-")).length, 0);
   await act(async () => dropdown.unmount());
   next = new Error("disconnected");
   await poll();

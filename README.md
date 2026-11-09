@@ -1,6 +1,6 @@
 # DSH Model Scheduler
 
-Shared GPU model handoff and conversation activity indicators for DeepSeek Harness 0.2.1-rc.2. No Harness or native-engine patches are needed.
+Shared GPU model handoff and conversation activity indicators for DeepSeek Harness 0.2.1-rc.2 and 0.2.1-rc.5. No Harness or native-engine patches are needed.
 
 ## Install
 
@@ -33,6 +33,8 @@ Only registered provider processes can be unloaded. Unknown GPU applications are
 
 Blue persists through gaps between chunks until that model call ends. Each new call starts grey. Nested subagent activity rolls up through its ancestor chats; ordinary chat forks do not affect parents. Reduced-motion preferences disable the added rotation. Fast grey can include model loading, checkpoint restore and network latency; it is not a measurement of GPU prefill kernels. One authenticated read-only poll updates phases while the browser is visible.
 
+Subagent dropdown rows use the same blue output / grey prefill indicators as sidebar chats, including nested branches and the header count. Native anonymous Cordis renderers are matched by their renderer identity, so inherited `root` diagnostic labels do not disable the override.
+
 The indicator implementation was merged from `dsh-activity-indicators` revision `608312452fc3d66656739256f887b03e1be469b4`. The old standalone repository can be removed after this release is published. Adapted DSH subagent views retain their MIT notice in THIRD_PARTY_LICENSES.md.
 
 ## Provider integration
@@ -56,3 +58,5 @@ Background plugins can register `registerResourceGuard(id, async ({gpu, key, sig
 The sidebar uses its row-action slot for scoped styles. DSH 0.2.1-rc.2 has no individual subagent indicator slot, so the two catalog presentation slots use supported priority shadowing. The adapted view preserves navigation, keyboard handling, metrics and locale. No Harness files are modified; removing the plugin restores its standard views.
 
 After editing client sources, run `npm run build`, `npm run check` and `npm test`. The suite covers timing, model batches, cancellation, lifecycle, authentication, phase tracking and rendered subagent indicators. `scripts/verify-providers.mjs` checks the actual Strata, NInfer and Dory runtime classes with simulated servers; CI pins their source revisions.
+
+For an existing installation with the scheduler host already running, a browser-only indicator fix can be applied to the installed `client.js`. Reload the browser when convenient to load it; leave DSH and its agent sessions running. A new plugin installation still requires the ordinary setup above.
