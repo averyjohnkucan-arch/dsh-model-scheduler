@@ -37,3 +37,36 @@ test('anonymous browser plugins inherit root rather than their module ID', async
   assert.equal(registrant, 'root');
  } finally { await ctx.fiber.dispose(); }
 });
+
+test('public session and stream hooks establish family ordering, including resumed children', async t => {
+ const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
+ const root=await mkdtemp(join(tmpdir(),'scheduler-family-')),prior=process.env.DSH_HOME;
+ process.env.DSH_HOME=root;
+ const ctx=new Context();
+ t.after(async()=>{
+  await ctx.fiber.dispose();
+  if(prior===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=prior;
+  await rm(root,{recursive:true,force:true});
+ });
+ ctx.provide('webServer',{register:()=>()=>{},getOrigin:()=> 'http://127.0.0.1:3080'});
+ const {apply}=await import('../index.js');
+ await ctx.plugin({apply:scope=>apply(scope,{switchSeconds:0})});
+ const scheduler=ctx.get('modelScheduler');
+ const driver={key:'model',name:'model',gpu:0,fingerprint:'model',load:async()=>({}),unload:async()=>{}};
+ const request=id=>scheduler.withSession(id,()=>scheduler.acquire(driver));
+ ctx.emit('session/event',{id:'main'},{type:'subagent/catalog',data:{childId:'sub1',mode:'continuable'}});
+ ctx.emit('agent/assistant-stream',{
+  agent:{id:'sub2',session:{id:'sub2',header:{origin:'subagent',parentSession:'main'}}},
+  frame:{type:'start',attemptId:'resume'},
+ });
+ const first=await request('main');
+ const child1=request('sub1'),child2=request('sub2'),parent=request('main');
+ first.release();
+ const sub1=await child1;
+ assert.equal(scheduler.device(0).current.sessionId,'sub1');
+ sub1.release();
+ const main=await parent;
+ assert.equal(scheduler.device(0).current.sessionId,'main');
+ main.release();
+ (await child2).release();
+});

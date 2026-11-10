@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-scheduler",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Cooperative model admission, idle unloading and background GPU yielding for DeepSeek Harness.",
   "license": "MIT",
@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check index.js && node --check client.js && node --check lib/activity.js && node --check lib/indicators.js && node --check scripts/verify-providers.mjs",
+    "check": "node --check index.js && node --check client.js && node --check lib/family-turns.js && node --check lib/activity.js && node --check lib/indicators.js && node --check scripts/verify-providers.mjs",
     "build": "node scripts/build-client.mjs"
   },
   "engines": {

@@ -4,7 +4,7 @@ Shared GPU model handoff and conversation activity indicators for DeepSeek Harne
 
 ## Install
 
-Paste `https://github.com/averyjohnkucan-arch/dsh-model-scheduler#v0.2.0` into **Plugins → Add plugin**, enable it, then restart DSH and reload the page. Use Strata 0.6.4+, NInfer 0.4.3+ and Dory 0.2.1+ for the coordinated paths verified with this release. Existing saved profiles and native tuning settings stay in their provider plugins.
+Paste `https://github.com/averyjohnkucan-arch/dsh-model-scheduler` into **Plugins → Add plugin**, enable it, then restart DSH and reload the page. Use Strata 0.6.4+, NInfer 0.4.3+ and Dory 0.2.1+ for the coordinated paths verified with this release. Existing saved profiles and native tuning settings stay in their provider plugins.
 
 The activity indicators are included here. Disable and uninstall the old `dsh-activity-indicators` plugin if it is installed; only this scheduler plugin is needed.
 
@@ -12,7 +12,9 @@ The activity indicators are included here. Disable and uninstall the old `dsh-ac
 
 - With no other model waiting, unload after **60 seconds** without a request.
 - When a different model waits, switch after **5 quiet seconds** since the last request released its lease. An active answer and checkpoint save finish before that clock starts.
-- Drain queued requests for the resident model across conversations, in arrival order within that model. A new request for it during the quiet interval runs immediately and restarts the clock after finishing.
+- When both a main chat and its subagents have model requests queued on the same GPU, alternate **main → sub1 → main → sub2 → main → sub3**, rotating the subagents. Nested descendants share the original main chat’s subagent half. Each share is one admitted model request, not an entire chat turn or a fixed number of tokens.
+- If the main chat has no queued request (for example, it is waiting for tools or results), children keep running. The next waiting main request receives the next family share after a child. The scheduler does not create extra model requests or interrupt an answer already in progress.
+- Family alternation takes precedence over resident-model batching, including when the main chat and children use different models. Unrelated chats retain resident-model batching, in arrival order within that model. Ordinary forks and external tasks are not counted as subagents. Explicit tool handoffs and foreground priority remain unchanged.
 - Tool calls, questions and turn boundaries can create the required pause. Completing a turn does not bypass the five seconds; a long tool call does not retain the GPU forever.
 - A cancelled contender is removed without loading. If no contenders remain, the normal 60-second idle deadline applies. Each GPU has its own queue.
 
@@ -60,3 +62,5 @@ The sidebar uses its row-action slot for scoped styles. DSH 0.2.1-rc.2 has no in
 After editing client sources, run `npm run build`, `npm run check` and `npm test`. The suite covers timing, model batches, cancellation, lifecycle, authentication, phase tracking and rendered subagent indicators. `scripts/verify-providers.mjs` checks the actual Strata, NInfer and Dory runtime classes with simulated servers; CI pins their source revisions.
 
 For an existing installation with the scheduler host already running, a browser-only indicator fix can be applied to the installed `client.js`. Reload the browser when convenient to load it; leave DSH and its agent sessions running. A new plugin installation still requires the ordinary setup above.
+
+Host-side scheduling updates take effect when the plugin host next starts. Replacing files while DSH runs stages the update; a browser refresh alone does not activate the new scheduling policy.

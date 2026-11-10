@@ -57,7 +57,10 @@ export async function apply(ctx, config = {}) {
   const indicators = new Activity();
   ctx.on(
     "agent/assistant-stream",
-    ({ agent, frame }) => indicators.frame(agent.id, frame),
+    ({ agent, frame }) => {
+      if (agent.session) scheduler.activity.observe(agent.session);
+      indicators.frame(agent.id, frame);
+    },
     { global: true },
   );
   ctx.on(
