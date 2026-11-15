@@ -28,12 +28,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: averyjohnkucan-arch/dsh-strata
-          ref: 6a487848f2a00c8a926eb240b1e0770e842bee69
+          ref: d8403b604e4f0ecb7ffde5a45e260e330a0d19d6
           path: .providers/strata
       - uses: actions/checkout@v4
         with:
           repository: averyjohnkucan-arch/dsh-ninfer
-          ref: 7e28acc087614f54d2b00cfbe294777441a098f8
+          ref: b842c035e7755254f8d286dcd0a39daa87c3a4f5
           path: .providers/ninfer
       - uses: actions/checkout@v4
         with:
