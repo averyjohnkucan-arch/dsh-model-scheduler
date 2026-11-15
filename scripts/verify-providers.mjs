@@ -101,6 +101,8 @@ try {
   e.release();
   await calibration;
   assert.deepEqual(events.slice(-2), ["unload dory", "calibrate ninfer"]);
+  // Preparation is covered by provider tests; this fixture measures scheduler admission.
+  strata.prepare = async () => s;
   strata.tuneLocal = async () => {
     events.push("tune strata");
   };

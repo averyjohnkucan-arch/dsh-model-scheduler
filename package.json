@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-scheduler",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "description": "Cooperative model admission, idle unloading and background GPU yielding for DeepSeek Harness.",
   "license": "MIT",
@@ -19,7 +19,8 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "THIRD_PARTY_LICENSES.md"
+    "THIRD_PARTY_LICENSES.md",
+    "COMPATIBILITY.md"
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
@@ -28,11 +29,11 @@
   },
   "engines": {
     "node": ">=22.19",
-    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/schemastery": "~3.19.0"
   },
   "dsh": {
     "bundle": {

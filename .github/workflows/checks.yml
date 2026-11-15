@@ -10,7 +10,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - uses: pnpm/action-setup@v4
         with:
           version: '11.25.0'
@@ -28,21 +28,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: averyjohnkucan-arch/dsh-strata
-          ref: 0bd196f6975d5e9e9be606e3e37490d3a99d2bd0
+          ref: 6a487848f2a00c8a926eb240b1e0770e842bee69
           path: .providers/strata
       - uses: actions/checkout@v4
         with:
           repository: averyjohnkucan-arch/dsh-ninfer
-          ref: 554644fc1ea7043593fff7f73b252716adef00c3
+          ref: 7e28acc087614f54d2b00cfbe294777441a098f8
           path: .providers/ninfer
       - uses: actions/checkout@v4
         with:
           repository: averyjohnkucan-arch/dsh-dory
-          ref: 1e32198be1c52e6e755b4e1a1446b5f2adadf67f
+          ref: 304e2fe17412257516902b0bb252a6a3de900252
           path: .providers/dory
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - uses: pnpm/action-setup@v4
         with:
           version: '11.25.0'
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Publish tested plugin
         env:
           GH_TOKEN: ${{ github.token }}
