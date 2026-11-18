@@ -1,6 +1,8 @@
 # DSH Model Scheduler
 
-Shared GPU model handoff and conversation activity indicators for DeepSeek Harness 0.2.1-rc.2 and 0.2.1-rc.5. No Harness or native-engine patches are needed.
+**RC4 installation trial.** Start DeepSeek Harness with `npx @deepseek-ai/dsh@0.2.2-rc.4 web` (Node.js 24.9 or newer). In **Plugins → Add plugin**, paste the full path to this RC4 trial’s `.tgz` file and enable the plugin.
+
+Shared GPU model handoff and conversation activity indicators for DeepSeek Harness 0.2.2-rc.4. No Harness or native-engine patches are needed.
 
 ## Install
 
@@ -57,7 +59,7 @@ Background plugins can register `registerResourceGuard(id, async ({gpu, key, sig
 
 ## Development
 
-The sidebar uses its row-action slot for scoped styles. DSH 0.2.1-rc.2 has no individual subagent indicator slot, so the two catalog presentation slots use supported priority shadowing. The adapted view preserves navigation, keyboard handling, metrics and locale. No Harness files are modified; removing the plugin restores its standard views.
+The sidebar uses its row-action slot for scoped styles. DSH 0.2.2-rc.4 has no individual subagent indicator slot, so the two catalog presentation slots use supported priority shadowing. The adapted view preserves navigation, keyboard handling, metrics and locale. No Harness files are modified; removing the plugin restores its standard views.
 
 After editing client sources, run `npm run build`, `npm run check` and `npm test`. The suite covers timing, model batches, cancellation, lifecycle, authentication, phase tracking and rendered subagent indicators. `scripts/verify-providers.mjs` checks the actual Strata, NInfer and Dory runtime classes with simulated servers; CI pins their source revisions.
 
